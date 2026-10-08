@@ -1,0 +1,7 @@
+streamlit>=1.46
+pandas
+numpy
+openpyxl
+plotly
+reportlab
+pypdfium2
