@@ -1,9 +1,11 @@
 """
-Wartburg football — Scout Opposing Offense: Buena Vista.
+Wartburg football — Scout Opposing Offenses (Buena Vista, Loras, ...).
 
 Run with:  streamlit run app.py
-Game files go in ./data (one Buena Vista offense breakdown .xlsx per game), or upload them in the sidebar.
-Pages: Scout (every tab), Sideline (one situation at a time, phone-friendly), Scouting report (one-page PDF).
+Game files go in ./data (one offense breakdown .xlsx per game, any team), or upload them in the sidebar.
+The team comes from each file's title row; pick the team at the top of the sidebar (or ?team=Loras in the URL).
+Pages: Scout (every tab), Sideline (one situation at a time, phone-friendly), Scouting report (one-page PDF),
+Compare teams (every loaded offense side by side, plus common opponents).
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ import scout_views as v
 
 DATA_DIR = Path(__file__).parent / "data"
 
-st.set_page_config(page_title=f"{bd.OUR_TEAM} · Scout {bd.SCOUTED_TEAM} Offense", page_icon="🏈", layout="wide")
+st.set_page_config(page_title=f"{bd.OUR_TEAM} · Opponent Scout", page_icon="🏈", layout="wide")
 
 
 @st.cache_data(show_spinner="Reading game files…")
@@ -35,6 +37,7 @@ def gather_files(uploads) -> tuple[tuple[str, bytes], ...]:
 # ------------------------------------------------------------------------------
 # Data (tucked away at the bottom of the sidebar; rarely touched)
 # ------------------------------------------------------------------------------
+team_box = st.sidebar.container()    # team picker, top of the sidebar on every page
 filter_box = st.sidebar.container()  # page filters are drawn here, above the data settings
 
 with st.sidebar:
@@ -49,16 +52,45 @@ with st.sidebar:
 
 files = gather_files(uploads)
 if not files:
-    st.title(f"Scout {bd.SCOUTED_TEAM} Offense")
-    st.info(f"No game files yet. Put Buena Vista offense breakdowns in `{DATA_DIR}` or upload them in the sidebar.")
+    st.title("Scout Opposing Offenses")
+    st.info(f"No game files yet. Put offense breakdowns in `{DATA_DIR}` or upload them in the sidebar.")
     st.stop()
 
-plays, errors = load(files, infer_dir)
+plays_all, errors = load(files, infer_dir)
 for e in errors:
     st.sidebar.warning(e)
-if plays.empty:
+if plays_all.empty:
     st.error("None of the files could be read.")
     st.stop()
+
+# ------------------------------------------------------------------------------
+# Team (every page works on one scouted team; Compare teams uses them all)
+# ------------------------------------------------------------------------------
+TEAMS = bd.teams_by_recency(plays_all)  # most recent game first, so the newest scout is the default
+# Widgets whose options depend on the team; cleared when the team changes so stale picks don't linger.
+TEAM_KEYS = ["f_games", "f_down", "f_dist", "f_zone", "rp_games", "pr_pers", "pr_form", "sl_pers", "sl_form",
+             "log_q"]
+
+
+def on_team_change():
+    for k in TEAM_KEYS:
+        st.session_state.pop(k, None)
+    st.query_params["team"] = st.session_state["team"]
+
+
+if st.session_state.get("team") not in TEAMS:
+    qp = st.query_params.get("team", "")
+    st.session_state["team"] = next((t for t in TEAMS if t.lower() == qp.lower()), TEAMS[0])
+with team_box:
+    counts = plays_all.groupby("team")["game_id"].nunique()
+    if len(TEAMS) > 1:
+        st.radio("Scouting", TEAMS, key="team", on_change=on_team_change,
+                 format_func=lambda t: f"{t} ({counts[t]} games)")
+    TEAM = st.session_state["team"]
+    if len(TEAMS) == 1:
+        st.markdown(f"**Scouting {TEAM}** · {counts[TEAM]} games")
+st.query_params["team"] = TEAM
+plays = plays_all[plays_all["team"] == TEAM]
 
 # ------------------------------------------------------------------------------
 # Pages
@@ -75,6 +107,10 @@ def reset_filters():
         st.session_state[k] = []
 
 
+def last_n_games(n: int = 3):
+    st.session_state["f_games"] = list(game_order["game_label"].tail(n))
+
+
 def scout_page():
     # Filters: games, down, distance, field zone. Nothing picked = everything.
     with filter_box:
@@ -87,7 +123,11 @@ def scout_page():
         sel_dist = st.pills("Distance", bd.DISTANCE_ORDER, selection_mode="multi", key="f_dist",
                             format_func=DIST_SHORT.get) or bd.DISTANCE_ORDER
         sel_zone = st.pills("Field zone", bd.ZONE_ORDER, selection_mode="multi", key="f_zone") or bd.ZONE_ORDER
-        st.button("Clear filters", on_click=reset_filters, width="stretch")
+        c1, c2 = st.columns(2)
+        c1.button("Last 3 games", on_click=last_n_games, width="stretch",
+                  help="Weight the scout toward what they're doing now.",
+                  disabled=len(game_order) <= 3)
+        c2.button("Clear filters", on_click=reset_filters, width="stretch")
 
     # games = whole selected games (for drives, previous-snap context, scripts)
     games = plays[plays["game_label"].isin(sel_games)]
@@ -105,7 +145,7 @@ def scout_page():
     drives = bd.drive_table(games)
     filters_on = len(sel_down) < 4 or len(sel_dist) < 4 or len(sel_zone) < 4
 
-    st.title(f"Scout {bd.SCOUTED_TEAM} Offense")
+    st.title(f"Scout {TEAM} Offense")
     st.caption(f"{bd.OUR_TEAM} football · {len(sel_games)} of {plays['game_id'].nunique()} games selected"
                + (" · situation filters on" if filters_on else ""))
 
@@ -158,11 +198,11 @@ def scout_page():
 @st.cache_data(show_spinner="Building the report…")
 def report_pdf(game_ids: tuple[str, ...], infer: bool, file_key: int) -> bytes:
     import report  # reportlab is only needed for this page
-    return report.build_report(plays[plays["game_id"].isin(game_ids)])
+    return report.build_report(plays_all[plays_all["game_id"].isin(game_ids)])
 
 
 def report_page():
-    st.title("Scouting report")
+    st.title(f"{TEAM} scouting report")
     st.caption("One landscape page for printing. Uses whole games (no down/distance filters).")
     latest = int(game_order["season"].max())
     default = list(game_order.loc[game_order["season"] == latest, "game_label"])
@@ -173,7 +213,7 @@ def report_page():
         return
     ids = tuple(game_order.loc[game_order["game_label"].isin(picked), "game_id"])
     pdf = report_pdf(ids, infer_dir, hash(files))
-    st.download_button("Download PDF", pdf, f"{bd.SCOUTED_TEAM.replace(' ', '_')}_offense_scouting_report.pdf",
+    st.download_button("Download PDF", pdf, f"{TEAM.replace(' ', '_')}_offense_scouting_report.pdf",
                        "application/pdf", type="primary", icon=":material/download:")
     try:  # preview, if pypdfium2 is installed
         import pypdfium2 as pdfium
@@ -188,11 +228,19 @@ def report_page():
 
 
 def sideline_page():
-    st.subheader(f"{bd.SCOUTED_TEAM} offense · sideline")
+    st.subheader(f"{TEAM} offense · sideline")
     v.render_sideline(plays)
+
+
+def compare_page():
+    st.title("Compare teams")
+    st.caption("Every loaded offense side by side. Ignores the team picker.")
+    v.render_compare(plays_all)
 
 
 pg = st.navigation([st.Page(scout_page, title="Scout", icon=":material/search:", default=True),
                     st.Page(sideline_page, title="Sideline", icon=":material/sports_football:", url_path="sideline"),
-                    st.Page(report_page, title="Scouting report", icon=":material/description:", url_path="report")])
+                    st.Page(report_page, title="Scouting report", icon=":material/description:", url_path="report"),
+                    st.Page(compare_page, title="Compare teams", icon=":material/compare_arrows:",
+                            url_path="compare")])
 pg.run()

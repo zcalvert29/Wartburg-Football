@@ -1,5 +1,5 @@
 """
-One-page printable scouting report (landscape letter PDF) for the Buena Vista offense.
+One-page printable scouting report (landscape letter PDF) for the scouted team's offense.
 
 build_report(games) takes the plays for the games to include (whole games: no down/distance filters) and returns
 PDF bytes. Everything is computed from the same helpers the app uses, so the numbers match the screens.
@@ -247,7 +247,8 @@ def opening_block(games: pd.DataFrame, n: int = 10) -> list:
 # ------------------------------------------------------------------------------
 # Assemble
 # ------------------------------------------------------------------------------
-def build_report(games: pd.DataFrame, our_team: str = bd.OUR_TEAM, scouted: str = bd.SCOUTED_TEAM) -> bytes:
+def build_report(games: pd.DataFrame, our_team: str = bd.OUR_TEAM, scouted: str | None = None) -> bytes:
+    scouted = scouted or v.team_of(games)
     s = v.snaps(games)
     drives = bd.drive_table(games)
     order = games.drop_duplicates("game_id").sort_values("date")

@@ -1,5 +1,5 @@
 """
-Rendering for the Buena Vista opposing-offense scout. Every render_* function takes the filtered plays
+Rendering for the opposing-offense scout (one scouted team at a time). Every render_* function takes the filtered plays
 (and, where it needs whole drives or the previous snap, the unfiltered games) and draws one section.
 
 Conventions (same as the Dowling app):
@@ -87,6 +87,13 @@ LEGEND = (f'<div style="display:flex;gap:14px;font-size:12px;margin:2px 0 8px;fl
           f'lean = low end 55%+</span></div>')
 
 
+def team_of(d: pd.DataFrame) -> str:
+    """Name of the scouted team in these plays (the app always passes one team's plays)."""
+    if "team" in d and d["team"].notna().any():
+        return str(d["team"].dropna().iat[0])
+    return bd.SCOUTED_TEAM
+
+
 def esc(x) -> str:
     return _html.escape("" if x is None or (isinstance(x, float) and np.isnan(x)) else str(x))
 
@@ -150,7 +157,7 @@ def show(t: pd.DataFrame, title: str | None = None, caption: str | None = None, 
             cfg[c] = st.column_config.NumberColumn(c, format="%.0f%%")
         elif c == "EPA/play" or c == "EPA":
             cfg[c] = st.column_config.NumberColumn(c, format="%+.2f")
-        elif c in ("Yds/play", "Avg gain"):
+        elif c in ("Yds/play", "Avg gain", "Points / drive"):
             cfg[c] = st.column_config.NumberColumn(c, format="%.1f")
     kw = {"height": height} if height else {}
     st.dataframe(t, hide_index=True, column_config=cfg, width="stretch", **kw)
@@ -247,7 +254,7 @@ def render_tendencies(d_any_down: pd.DataFrame, d: pd.DataFrame, drives: pd.Data
     if not t.empty:
         t["_o"] = t["Distance"].map({v: i for i, v in enumerate(bd.DISTANCE_ORDER)})
         t = t.sort_values(["DN", "_o"]).drop(columns="_o")
-    show(t, "Buena Vista offensive tendencies by down & distance")
+    show(t, f"{team_of(d_any_down)} offensive tendencies by down & distance")
 
     st.markdown("**What they call from each look**")
     look = st.radio("Look", ["Personnel", "Formation", "Backfield", "Personnel + formation", "Formation family"],
@@ -477,7 +484,7 @@ def render_sequencing(d: pd.DataFrame, games: pd.DataFrame):
                      "Read": grade_word(k, len(s)), "Pass vs usual": f"{(p - base) * 100:+.0f} pts",
                      "Top call": f"{v} ({sh:.0%})" if v else "", "Success": s[s["live"]]["success"].mean() * 100,
                      "EPA/play": s[s["live"]]["epa"].mean()})
-    show(pd.DataFrame(rows), "What Buena Vista calls after...",
+    show(pd.DataFrame(rows), f"What {team_of(games)} calls after...",
          f"Usual pass rate in these filters: {base:.0%}. Previous snap = the snap before in the same drive, "
          "even if the filters hide it.")
 
@@ -681,6 +688,7 @@ def tells_table(d: pd.DataFrame, min_n: int, outcomes: list[str], keep_parts: bo
             if n < min_n:
                 continue
             key = key if isinstance(key, tuple) else (key,)
+            key = tuple(int(k) if isinstance(k, float) and k.is_integer() else k for k in key)
             label = " · ".join(f"{'Dn ' if c == 'DN' else ''}{'Hash ' if c == 'HASH' else ''}{k}"
                                for c, k in zip(cols, key))
             for out_name, oc in TELL_OUTCOMES:
@@ -736,8 +744,10 @@ def render_protection(d: pd.DataFrame):
         st.info("No passes match the current filters.")
         return
     cov = len(tagged) / len(p)
-    st.caption(f"Protection is tagged on {cov:.0%} of passes in these filters "
-               f"(the 2025 Wartburg file has no protection tags).")
+    by_game = p.groupby("game_label")["PROTECTION"].apply(lambda s: s.notna().any())
+    untagged = [g.split(" · ", 1)[-1] for g, has in by_game.items() if not has]
+    st.caption(f"Protection is tagged on {cov:.0%} of passes in these filters"
+               + (f" (no protection tags in: {', '.join(untagged)})." if untagged else "."))
     if tagged.empty:
         return
     # Protections that aren't really protections
@@ -834,10 +844,22 @@ def render_predictor(d: pd.DataFrame):
 # ==============================================================================
 # 11. Last meeting vs Wartburg (new)
 # ==============================================================================
+def profile(g: pd.DataFrame) -> dict:
+    """Headline offense numbers for a set of whole games."""
+    s = snaps(g)
+    live = s[s["live"]]
+    return {"Snaps / game": len(s) / max(g["game_id"].nunique(), 1), "Run %": (1 - s["PASS"].mean()) * 100,
+            "Success %": live["success"].mean() * 100, "EPA/play": live["epa"].mean(),
+            "Explosive %": live["explosive_play"].mean() * 100, "Motion %": s["has_motion"].mean() * 100,
+            "3rd down conv %": live.loc[live["DN"] == 3, "converted"].mean() * 100,
+            "Points / drive": bd.drive_table(g)["points"].mean()}
+
+
 def render_last_meeting(games_all: pd.DataFrame, our_team: str = bd.OUR_TEAM):
     vs = games_all[games_all["opponent"].str.lower() == our_team.lower()]
     if vs.empty:
-        st.info(f"No games against {our_team} in the loaded files.")
+        st.info(f"No {team_of(games_all)} game against {our_team} in the loaded files. Add last season's "
+                f"breakdown to the data folder to compare how they attacked {our_team} with what they do now.")
         return
     last = vs["date"].max()
     meet = vs[vs["date"] == last]
@@ -846,17 +868,9 @@ def render_last_meeting(games_all: pd.DataFrame, our_team: str = bd.OUR_TEAM):
         other = games_all[games_all["opponent"].str.lower() != our_team.lower()]
     label_m = meet["game_label"].iat[0]
     label_o = f"Since then ({other['game_id'].nunique()} games)"
-    st.markdown(f"**How Buena Vista attacked {our_team} ({label_m}) vs. what they've done since**")
+    st.markdown(f"**How {team_of(games_all)} attacked {our_team} ({label_m}) vs. what they've done since**")
 
-    def stats(g):
-        s = snaps(g)
-        live = s[s["live"]]
-        return {"Snaps / game": len(s) / max(g["game_id"].nunique(), 1), "Run %": (1 - s["PASS"].mean()) * 100,
-                "Success %": live["success"].mean() * 100, "EPA/play": live["epa"].mean(),
-                "Explosive %": live["explosive_play"].mean() * 100, "Motion %": s["has_motion"].mean() * 100,
-                "3rd down conv %": live.loc[live["DN"] == 3, "converted"].mean() * 100,
-                "Points / drive": bd.drive_table(g)["points"].mean()}
-    t = pd.DataFrame({label_m: stats(meet), label_o: stats(other)})
+    t = pd.DataFrame({label_m: profile(meet), label_o: profile(other)})
     t["Change"] = t[label_o] - t[label_m]
     st.dataframe(t.round(2), width="stretch")
 
@@ -877,7 +891,7 @@ def render_last_meeting(games_all: pd.DataFrame, our_team: str = bd.OUR_TEAM):
     if new or newf:
         st.markdown(f"**New since {our_team}:** concepts {', '.join(sorted(new)) or '—'}; "
                     f"formations {', '.join(sorted(newf)) or '—'}")
-        st.caption("Some of this is tagging, not scheme: the 2025 file was broken down with a slightly different "
+        st.caption("Some of this is tagging, not scheme: older files may be broken down with a slightly different "
                    "vocabulary (e.g. bare '34' tagged BOB). Check the play log before calling something new.")
     live = snaps(meet)[snaps(meet)["live"]]
     c1, c2 = st.columns(2)
@@ -885,6 +899,88 @@ def render_last_meeting(games_all: pd.DataFrame, our_team: str = bd.OUR_TEAM):
         show_plays(live.nlargest(8, "epa"), f"What hurt {our_team} most")
     with c2:
         show_plays(live.nsmallest(8, "epa"), f"Where {our_team} won")
+
+
+# ==============================================================================
+# Compare teams (new): every scouted offense side by side, plus common opponents
+# ==============================================================================
+SITUATIONS = [("1st & 10", lambda d: (d["DN"] == 1) & (d["DIST"] == 10)),
+              ("1st & other", lambda d: (d["DN"] == 1) & (d["DIST"] != 10)),
+              ("2nd & 1-3", lambda d: (d["DN"] == 2) & (d["DIST"] <= 3)),
+              ("2nd & 4-6", lambda d: (d["DN"] == 2) & d["DIST"].between(4, 6)),
+              ("2nd & 7+", lambda d: (d["DN"] == 2) & (d["DIST"] >= 7)),
+              ("3rd & 1-3", lambda d: (d["DN"] == 3) & (d["DIST"] <= 3)),
+              ("3rd & 4-6", lambda d: (d["DN"] == 3) & d["DIST"].between(4, 6)),
+              ("3rd & 7+", lambda d: (d["DN"] == 3) & (d["DIST"] >= 7)),
+              ("Red zone", lambda d: d["YARDLINE_100"] <= 20)]
+
+
+def render_compare(plays_all: pd.DataFrame, our_team: str = bd.OUR_TEAM):
+    teams = bd.teams_by_recency(plays_all)
+    if len(teams) < 2:
+        st.info("Only one team's games are loaded. Add another team's breakdowns to compare.")
+        return
+    latest = int(plays_all["season"].max())
+    this_season = st.toggle(f"{latest} games only", value=True, key="cmp_season")
+    x = plays_all[plays_all["season"] == latest] if this_season else plays_all
+    x = x[x["opponent"].str.lower() != our_team.lower()] if this_season else x
+    teams = [t for t in teams if (x["team"] == t).any()]
+
+    prof = pd.DataFrame({f"{t} ({x.loc[x['team'] == t, 'game_id'].nunique()} g)": profile(x[x["team"] == t])
+                         for t in teams})
+    st.markdown("**Offense profile**")
+    st.dataframe(prof.round(2), width="stretch")
+
+    st.markdown("**Pass rate by situation**")
+    rows = []
+    for name, rule in SITUATIONS:
+        row = {"Situation": name}
+        for t in teams:
+            s = snaps(x[x["team"] == t])
+            g = s[rule(s).fillna(False).astype(bool)]
+            row[t] = f"{g['PASS'].mean():.0%} ({len(g)})" if len(g) else "–"
+        rows.append(row)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    st.caption("Pass share of run/pass calls (snaps in parentheses).")
+
+    s = snaps(x)
+    mix = (s.groupby("team")["CALL GROUP"].value_counts(normalize=True).mul(100).rename("Share").reset_index())
+    fig = px.bar(mix, x="Share", y="CALL GROUP", color="team", barmode="group", orientation="h",
+                 category_orders={"CALL GROUP": ["Run"] + bd.PASS_GROUP_ORDER + ["Other pass"], "team": teams},
+                 labels={"Share": "% of snaps", "CALL GROUP": "", "team": ""})
+    fig.update_layout(height=360, margin=dict(t=10, l=0, r=0, b=0), legend=dict(orientation="h", y=1.08))
+    st.markdown("**Call mix**")
+    st.plotly_chart(fig, width="stretch")
+
+    c1, c2 = st.columns(2)
+    for col, field, title in ((c1, "PERSONNEL", "Personnel"), (c2, "OFF FORM", "Top formations")):
+        m = pd.crosstab(s[field].fillna("untagged"), s["team"], normalize="columns").mul(100).round(0)
+        m = m[[t for t in teams if t in m.columns]]
+        m = m.loc[m.max(axis=1).sort_values(ascending=False).index].head(10)
+        with col:
+            st.markdown(f"**{title}** (% of each team's snaps)")
+            st.dataframe(m, width="stretch")
+
+    # Common opponents: the same defense against each offense.
+    opp_teams = x.groupby("opponent")["team"].nunique()
+    common = sorted(opp_teams[opp_teams > 1].index)
+    st.markdown("**Common opponents**")
+    if not common:
+        st.caption("No opponent shows up for more than one team in these games.")
+        return
+    rows = []
+    for opp in common:
+        for t in teams:
+            g = x[(x["opponent"] == opp) & (x["team"] == t)]
+            if g.empty:
+                continue
+            r = g.iloc[0]
+            rows.append({"Opponent": opp, "Team": t,
+                         "Game": f"{'vs' if r['home_away'] == 'Home' else '@'} {opp} {r['date'].month}/{r['date'].day}",
+                         **{k: val for k, val in profile(g).items() if k != "Motion %"}})
+    t = pd.DataFrame(rows).rename(columns={"Snaps / game": "Snaps"})
+    show(t, caption="Same defense, different offenses: a rough read on which offense moved the ball better. "
+                    "One game each, so treat small gaps as noise.")
 
 
 # ==============================================================================
@@ -897,7 +993,7 @@ def render_play_log(d: pd.DataFrame):
         hay = x[["OFF FORM", "OFF PLAY", "CONCEPT", "MOTION", "BACKFIELD", "PROTECTION", "ROUTE"]].fillna("").astype(str)
         x = x[hay.apply(lambda r: q in " ".join(r), axis=1)]
     show_plays(x, f"{len(x)} rows (includes no-play rows)")
-    st.download_button("Download filtered plays (CSV)", x.to_csv(index=False).encode(), "buena_vista_plays.csv",
+    st.download_button("Download filtered plays (CSV)", x.to_csv(index=False).encode(), f"{team_of(d).lower().replace(' ', '_')}_plays.csv",
                        "text/csv")
 
 

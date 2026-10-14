@@ -1,11 +1,12 @@
 """
-Load and curate Buena Vista offensive breakdown files.
+Load and curate opponent offensive breakdown files (Buena Vista, Loras, ...).
 
 Each file is one game: row 1 is a title like "02 BUENA VISTA O vs BENEDICTINE 090526"
-(game number, home "vs" / away "@", opponent, MMDDYY), row 2 is the header, and every
+(game number, scouted team, home "vs" / away "@", opponent, MMDDYY), row 2 is the header, and every
 row after that is one offensive play (or a no-play row).
 
-curate_folder() / curate_files() return a play-level DataFrame with the same core column
+curate_folder() / curate_files() return a play-level DataFrame (every team's games, with a `team`
+column to split on) with the same core column
 names the Dowling app uses (DN, DIST, YARD LN, HASH, OFF FORM, OFF STR, OFF PLAY, GN/LS,
 PLAY TYPE, PLAY DIR, success, explosive_play, ep, epa, YARDLINE_100, ...) plus the extra
 tags these files carry (PERSONNEL, CONCEPT, CALL GROUP, MOTION, PROTECTION, ...).
@@ -20,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-SCOUTED_TEAM = "Buena Vista"
+SCOUTED_TEAM = "Buena Vista"  # fallback name only; each file's title row says whose offense it is
 OUR_TEAM = "Wartburg"
 
 RAW_COLUMNS = ["SER", "S#", "DN", "DIST", "FPOS", "HASH - D", "OFF PERS", "FORMATION", "FORM STR",
@@ -41,7 +42,7 @@ FP_ZONES = [("Backed up", "Goal to own 20", 80, 99), ("Neutral", "Own 20 to opp 
 ZONE_ORDER = [z[0] for z in FP_ZONES]
 
 # PLAY FAMILY spelling fixes.
-CONCEPT_FIXES = {"SPRINT OUT": "SPRINTOUT"}
+CONCEPT_FIXES = {"SPRINT OUT": "SPRINTOUT", "OW": "POW"}  # Loras @ Benedictine has one '37 POW' tagged OW
 
 # Pass families rolled up into how the ball is delivered.
 PASS_GROUPS = {"3 STEP": "Quick (3-step)", "5 STEP": "Dropback (5-step)", "PAD": "Play-action",
@@ -105,15 +106,21 @@ def _obj(s: pd.Series) -> pd.Series:
 def parse_title(title: str) -> dict:
     m = TITLE_RE.match(str(title).replace("\xa0", " "))
     if not m:
-        raise ValueError(f"Can't read the game title {title!r} (expected e.g. '02 BUENA VISTA O vs BENEDICTINE 090526')")
-    num, _team, loc, opp, mmddyy = m.groups()
+        raise ValueError(f"Can't read the game title {title!r} (expected e.g. '02 BUENA VISTA O vs BENEDICTINE 090526' or '05 LORAS O @ COE 100326')")
+    num, team, loc, opp, mmddyy = m.groups()
     date = pd.to_datetime(mmddyy, format="%m%d%y")
     season = date.year if date.month >= 3 else date.year - 1  # January bowl/playoff games count to the prior fall
-    opp = opp.title().replace("Mn", "MN")
+    team = team_name(team)
+    opp = team_name(opp)
     home_away = "Home" if loc.lower() == "vs" else "Away"
     label = f"{season} · {'vs' if home_away == 'Home' else '@'} {opp} ({date.month}/{date.day})"
-    return {"game_no": int(num), "opponent": opp, "home_away": home_away, "date": date, "season": season,
-            "game_id": f"{date:%Y-%m-%d} {opp}", "game_label": label}
+    return {"team": team, "game_no": int(num), "opponent": opp, "home_away": home_away, "date": date,
+            "season": season, "game_id": f"{team} {date:%Y-%m-%d} {opp}", "game_label": label}
+
+
+def team_name(raw: str) -> str:
+    """'BUENA VISTA' -> 'Buena Vista', 'MINNESOTA MORRIS' -> 'Minnesota Morris', 'ST OLAF' -> 'St Olaf'."""
+    return " ".join(str(raw).split()).title().replace("Mn", "MN")
 
 
 def read_game(source, name: str | None = None) -> pd.DataFrame:
@@ -196,9 +203,20 @@ def curate(raw: pd.DataFrame, infer_direction: bool = True) -> pd.DataFrame:
     pers = pd.to_numeric(d["PERSONNEL"], errors="coerce")
     d["PERSONNEL"] = _obj(pers.map(lambda x: None if pd.isna(x) else f"{int(x):02d}"))
 
-    d = d.sort_values(["date", "SERIES", "SNAP"], kind="stable").reset_index(drop=True)
+    d = d.sort_values(["team", "date", "SERIES", "SNAP"], kind="stable").reset_index(drop=True)
     d["PLAY #"] = d.groupby("game_id").cumcount() + 1
-    d["WEEK"] = d["date"].rank(method="dense").astype(int)
+    d["WEEK"] = d.groupby("team")["date"].rank(method="dense").astype(int)
+
+    # Blank R/P: fill it from the rest of the row. 'N' in PLAY marks a no-play; a pass family or a pass
+    # result means a pass; a run family means a run; anything else (no call tagged) is treated as a no-play.
+    blank = d["R/P"].isna()
+    if blank.any():
+        fam = d["CONCEPT"].replace(CONCEPT_FIXES)
+        run_fams = set(d.loc[d["R/P"] == "R", "CONCEPT"].dropna())
+        guess = np.select([d["OFF PLAY"] == "N", fam.isin(list(PASS_GROUPS) + ["STEP"]) | d["PASS RESULT"].notna(),
+                           fam.isin(run_fams)], ["N", "P", "R"], "N")
+        d.loc[blank, "R/P"] = guess[blank.to_numpy()]
+    d["R/P_FILLED"] = blank
 
     d["PLAY TYPE"] = _obj(d["R/P"].map({"R": "Run", "P": "Pass", "N": "No Play"}))
     d["snap"] = d["PLAY TYPE"].isin(["Run", "Pass"])
@@ -211,9 +229,10 @@ def curate(raw: pd.DataFrame, infer_direction: bool = True) -> pd.DataFrame:
     d.loc[is_naked, "CONCEPT"] = "NAKED"
     d["CALL #"] = _call_number(d["OFF PLAY"])
     passes = d[(d["PLAY TYPE"] == "Pass") & d["CONCEPT"].notna() & (d["CONCEPT"] != "STEP")]
-    modal = passes.groupby("CALL #")["CONCEPT"].agg(lambda s: s.mode().iat[0])
+    modal = passes.groupby(["team", "CALL #"])["CONCEPT"].agg(lambda s: s.mode().iat[0])  # each team's own numbering
     step = d["CONCEPT"] == "STEP"
-    d.loc[step, "CONCEPT"] = d.loc[step, "CALL #"].map(modal).fillna("STEP")
+    keys = pd.MultiIndex.from_arrays([d.loc[step, "team"], d.loc[step, "CALL #"]])
+    d.loc[step, "CONCEPT"] = pd.Series(modal.reindex(keys).to_numpy(), index=d.index[step]).fillna("STEP")
     d["CALL GROUP"] = np.where(d["PLAY TYPE"] == "Pass", d["CONCEPT"].map(PASS_GROUPS),
                                np.where(d["PLAY TYPE"] == "Run", "Run", pd.NA))
     d["CALL GROUP"] = _obj(pd.Series(d["CALL GROUP"], index=d.index).where(pd.notna(d["CALL GROUP"]), None))
@@ -355,7 +374,7 @@ def drive_table(d: pd.DataFrame) -> pd.DataFrame:
     if d.empty:
         return pd.DataFrame()
     g = d.sort_values(["game_id", "SERIES", "SNAP"]).groupby(["game_id", "SERIES"], sort=False)
-    out = g.agg(game_label=("game_label", "first"), season=("season", "first"), opponent=("opponent", "first"),
+    out = g.agg(team=("team", "first"), game_label=("game_label", "first"), season=("season", "first"), opponent=("opponent", "first"),
                 start=("YARDLINE_100", "first"), deepest=("YARDLINE_100", "min"), plays=("live", "sum"),
                 passes=("PASS", "sum"), end=("SERIES_END", "first")).reset_index()
     last_live = d[d["live"]].sort_values(["game_id", "SERIES", "SNAP"]).groupby(["game_id", "SERIES"]).tail(1)
@@ -369,3 +388,8 @@ def drive_table(d: pd.DataFrame) -> pd.DataFrame:
     out["start_zone"] = zone_of(out["start"])
     out["red_zone_trip"] = out["deepest"] <= 20
     return out
+
+
+def teams_by_recency(d: pd.DataFrame) -> list[str]:
+    """Scouted teams, the one with the most recent game first."""
+    return list(d.groupby("team")["date"].max().sort_values(ascending=False).index)
