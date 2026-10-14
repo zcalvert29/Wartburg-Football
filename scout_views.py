@@ -27,9 +27,7 @@ TENDENCY_GRADES = [(0.70, "Solid"), (0.55, "Likely")]
 BADGE = {"Solid": ("tell", "#FCEBEB", "#791F1F"), "Likely": ("lean", "#FAEEDA", "#854F0B"),
          "Small sample": ("small sample", "rgba(128,128,128,.15)", "inherit")}
 CARD = "border:0.5px solid rgba(128,128,128,.35);border-radius:8px;padding:8px 10px"
-GROUP_COLORS = {"Run": RUN_COLOR, "Quick (3-step)": "#7F77DD", "Dropback (5-step)": "#534AB7",
-                "Play-action": "#1D9E75", "Naked / boot": "#5DCAA5", "Sprint-out": "#9FE1CB", "Screen": "#D4537E",
-                "RPO": "#E8B923", "Other pass": "#888780"}
+DN_LABEL = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th"}
 RZ_BANDS = [("Red zone (11–20)", 11, 20), ("Inside the 10 (6–10)", 6, 10), ("Goal line (1–5)", 1, 5)]
 RZ_RESULTS = [("Touchdown", "#1D9E75"), ("FG Made", "#E8B923"), ("FG Missed", "#E24B4A"),
               ("Turnover on Downs", "#E24B4A"), ("Turnover", "#A32D2D"), ("Punt", "#B4B2A9"),
@@ -209,6 +207,175 @@ def kpis(d: pd.DataFrame, drives: pd.DataFrame):
 
 
 # ==============================================================================
+# Visual building blocks (HTML, so they follow the light/dark theme like the cards above)
+# ==============================================================================
+HEAT_RGB = (83, 74, 183)  # PASS_COLOR; one hue, light -> dark = small -> large
+GRID_ROW = "border-top:0.5px solid rgba(128,128,128,.25)"
+
+
+def _two_prop_z(k1, n1, k2, n2) -> float:
+    p = (k1 + k2) / (n1 + n2)
+    se = np.sqrt(p * (1 - p) * (1 / n1 + 1 / n2)) if 0 < p < 1 else np.nan
+    return (k1 / n1 - k2 / n2) / se if se and se > 0 else 0.0
+
+
+def _fmt(val, kind: str) -> str:
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return "–"
+    return {"pct": f"{val:.0%}", "epa": f"{val:+.2f}", "num": f"{val:.1f}", "int": f"{int(val)}"}.get(kind, esc(val))
+
+
+def split_rows_html(items: list[tuple[str, pd.DataFrame]], first_header: str, base_pass: float | None = None,
+                    extra: list[tuple[str, callable, str]] | None = None, top_col: str | None = "CALL GROUP",
+                    dim_under: int = TELL_MIN_N) -> str:
+    """
+    One row per (label, snaps): plays, a run/pass split bar with the tell badge, how far the pass rate sits from
+    `base_pass`, any `extra` columns (header, fn(g) -> value, kind), the top call, success and EPA.
+    Same layout as the Dowling sequencing tab.
+    """
+    extra = extra or []
+    cols = ["minmax(150px,1.3fr)", "52px", "minmax(150px,2fr)"]
+    heads = [first_header, '<div style="text-align:right">Plays</div>', "Run / pass"]
+    if base_pass is not None:
+        cols.append("minmax(120px,1fr)")
+        heads.append("vs. usual pass rate")
+    for h, _, _ in extra:
+        cols.append("72px")
+        heads.append(f'<div style="text-align:right">{h}</div>')
+    if top_col:
+        cols.append("minmax(120px,1.2fr)")
+        heads.append({"CALL GROUP": "Top call", "OFF FORM": "Top formation", "MOTION TYPE": "Top motion",
+                      "CONCEPT": "Top concept"}.get(top_col, "Top " + top_col.lower()))
+    cols += ["64px", "64px"]
+    heads += ['<div style="text-align:right">Success</div>', '<div style="text-align:right">EPA</div>']
+    grid = f"display:grid;grid-template-columns:{' '.join(cols)};gap:10px;align-items:center"
+    head = f'<div style="{grid};font-size:11px;opacity:.6;padding-bottom:4px">' + "".join(
+        h if h.startswith("<div") else f"<div>{h}</div>" for h in heads) + "</div>"
+    rows = []
+    for label, g in items:
+        n = len(g)
+        if n == 0:
+            continue
+        live = g[g["live"]]
+        run = 1 - g["PASS"].mean()
+        k = round(max(run, 1 - run) * n)
+        cells = [f"<div>{esc(label)}</div>", f'<div style="text-align:right;opacity:.7">{n}</div>',
+                 f'<div>{split_bar(run, 8)}<div style="font-size:11px;opacity:.75">Run {run:.0%} · Pass {1 - run:.0%}'
+                 f'{badge(k, n)}</div></div>']
+        if base_pass is not None:
+            diff = (1 - run) - base_pass
+            cells.append(f'<div style="font-size:12px;opacity:.7">{diff * 100:+.0f} pts pass</div>' if abs(diff) >= .05
+                         else '<div style="font-size:12px;opacity:.4">about usual</div>')
+        for _, fn, kind in extra:
+            cells.append(f'<div style="text-align:right">{_fmt(fn(g), kind)}</div>')
+        if top_col:
+            v, sh, _ = top_share(g[top_col])
+            cells.append(f'<div style="font-size:12px">{esc(v)} <span style="opacity:.6">{sh:.0%}</span></div>'
+                         if v is not None else "<div></div>")
+        cells += [f'<div style="text-align:right">{_fmt(live["success"].mean(), "pct")}</div>',
+                  f'<div style="text-align:right">{_fmt(live["epa"].mean(), "epa")}</div>']
+        rows.append(f'<div style="{grid};padding:6px 0;{GRID_ROW};font-size:13px'
+                    f'{";opacity:.55" if n < dim_under else ""}">{"".join(cells)}</div>')
+    if not rows:
+        return ""
+    width = 560 + 130 * (base_pass is not None) + 82 * len(extra) + 130 * bool(top_col)
+    return LEGEND + f'<div style="overflow-x:auto"><div style="min-width:{width}px">{head}{"".join(rows)}</div></div>'
+
+
+def show_split_rows(items, first_header: str, title: str | None = None, caption: str | None = None, **kw):
+    if title:
+        st.markdown(f"**{title}**")
+    h = split_rows_html(items, first_header, **kw)
+    st.html(h) if h else st.info("No plays match the current filters.")
+    if caption:
+        st.caption(caption)
+
+
+def groups(d: pd.DataFrame, col, min_n: int = 1, limit: int | None = None) -> list[tuple[str, pd.DataFrame]]:
+    """(label, snaps) per value of col (or list of cols), biggest first."""
+    cols = [col] if isinstance(col, str) else list(col)
+    x = snaps(d).dropna(subset=cols)
+    out = [(" · ".join(map(str, k if isinstance(k, tuple) else (k,))), g)
+           for k, g in x.groupby(cols if len(cols) > 1 else cols[0], sort=False)]
+    out = sorted([o for o in out if len(o[1]) >= min_n], key=lambda o: -len(o[1]))
+    return out[:limit] if limit else out
+
+
+def heat_html(t: pd.DataFrame, kind: str = "pct", row_header: str = "", total_col: pd.Series | None = None,
+              col_width: int = 64) -> str:
+    """A table where each cell is shaded by its value (one hue). kind: 'pct' (0-1 shares) or 'int' (counts)."""
+    if t.empty:
+        return ""
+    vmax = float(np.nanmax(t.to_numpy(dtype=float))) or 1.0
+    ncol = len(t.columns) + (total_col is not None)
+    grid = f"display:grid;grid-template-columns:minmax(110px,1.4fr) repeat({ncol},minmax({col_width}px,1fr));gap:3px"
+    cells = [f'<div style="font-size:11px;opacity:.6;align-self:end">{esc(row_header)}</div>']
+    cells += [f'<div style="font-size:11px;font-weight:600;text-align:center;align-self:end">{esc(c)}</div>'
+              for c in t.columns]
+    if total_col is not None:
+        cells.append('<div style="font-size:11px;opacity:.6;text-align:center;align-self:end">Plays</div>')
+    r, g_, b = HEAT_RGB
+    for idx, row in t.iterrows():
+        cells.append(f'<div style="font-size:12px;font-weight:600;align-self:center">{esc(idx)}</div>')
+        for c, val in row.items():
+            if pd.isna(val) or val == 0:
+                cells.append('<div style="border-radius:4px;background:rgba(128,128,128,.06);height:26px"></div>')
+                continue
+            a = 0.12 + 0.78 * (float(val) / vmax)
+            ink = "#fff" if a > 0.5 else "inherit"
+            txt = f"{val:.0%}" if kind == "pct" else f"{int(val)}"
+            cells.append(f'<div title="{esc(idx)} · {esc(c)}: {txt}" style="border-radius:4px;background:rgba({r},{g_},{b},{a:.2f});'
+                         f'color:{ink};font-size:12px;text-align:center;line-height:26px;height:26px">{txt}</div>')
+        if total_col is not None:
+            cells.append(f'<div style="font-size:12px;opacity:.6;text-align:center;line-height:26px">'
+                         f'{int(total_col.get(idx, 0))}</div>')
+    width = 120 + ncol * (col_width + 3)
+    return f'<div style="overflow-x:auto"><div style="{grid};min-width:{width}px">{"".join(cells)}</div></div>'
+
+
+def show_heat(t: pd.DataFrame, title: str, caption: str | None = None, **kw):
+    st.markdown(f"**{title}**")
+    h = heat_html(t, **kw)
+    st.html(h) if h else st.info("No plays match the current filters.")
+    if caption:
+        st.caption(caption)
+
+
+def hbars_html(items: list[tuple[str, float, str, str]], kind: str = "pct", vmax: float | None = None) -> str:
+    """Horizontal bars: (label, value, note, color). The value sits in its own column so a full bar never wraps."""
+    if not items:
+        return ""
+    vmax = vmax or max(v for _, v, _, _ in items) or 1
+    rows = []
+    for label, val, note, color in items:
+        w = max(0.0, min(1.0, val / vmax)) * 100
+        txt = f"{val:.0%}" if kind == "pct" else f"{val:.1f}"
+        rows.append(f'<div title="{esc(label)}: {txt} {esc(note)}" style="display:grid;grid-template-columns:'
+                    f'minmax(90px,1.2fr) minmax(100px,3fr) minmax(86px,auto);gap:10px;align-items:center;'
+                    f'padding:3px 0;font-size:12px">'
+                    f'<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{esc(label)}</div>'
+                    f'<div style="background:rgba(128,128,128,.10);border-radius:0 4px 4px 0;height:14px">'
+                    f'<div style="height:14px;width:{w:.1f}%;min-width:2px;background:{color};'
+                    f'border-radius:0 4px 4px 0"></div></div>'
+                    f'<div style="white-space:nowrap"><b>{txt}</b> <span style="opacity:.55">{esc(note)}</span></div>'
+                    f'</div>')
+    return "".join(rows)
+
+
+def show_hbars(items, title: str, caption: str | None = None, **kw):
+    st.markdown(f"**{title}**")
+    h = hbars_html(items, **kw)
+    st.html(h) if h else st.info("No plays match the current filters.")
+    if caption:
+        st.caption(caption)
+
+
+def type_color(g: pd.DataFrame) -> str:
+    """Run color if the group is mostly runs, pass color otherwise."""
+    return RUN_COLOR if g["PASS"].mean() < 0.5 else PASS_COLOR
+
+
+# ==============================================================================
 # 1. Tendencies
 # ==============================================================================
 def dd_grid_html(d: pd.DataFrame) -> str:
@@ -249,35 +416,30 @@ def render_tendencies(d_any_down: pd.DataFrame, d: pd.DataFrame, drives: pd.Data
     st.html(h) if h else st.info("No plays match the current filters.")
     st.caption("Each box: the run/pass lean, the most common concept, and the most-used personnel and "
                "formation. Faded boxes have fewer than 5 plays. Ignores the down and distance filters.")
-
-    t = summarize(d_any_down, ["DN", "Distance"], ("CALL GROUP", "OFF FORM"), sort_by_count=False)
-    if not t.empty:
-        t["_o"] = t["Distance"].map({v: i for i, v in enumerate(bd.DISTANCE_ORDER)})
-        t = t.sort_values(["DN", "_o"]).drop(columns="_o")
-    show(t, f"{team_of(d_any_down)} offensive tendencies by down & distance")
+    with st.expander("Down & distance as a table"):
+        t = summarize(d_any_down, ["DN", "Distance"], ("CALL GROUP", "OFF FORM"), sort_by_count=False)
+        if not t.empty:
+            t["_o"] = t["Distance"].map({v: i for i, v in enumerate(bd.DISTANCE_ORDER)})
+            t = t.sort_values(["DN", "_o"]).drop(columns="_o")
+        show(t, f"{team_of(d_any_down)} offensive tendencies by down & distance")
 
     st.markdown("**What they call from each look**")
-    look = st.radio("Look", ["Personnel", "Formation", "Backfield", "Personnel + formation", "Formation family"],
+    c1, c2 = st.columns([4, 1])
+    look = c1.radio("Look", ["Personnel", "Formation", "Backfield", "Personnel + formation", "Formation family"],
                     horizontal=True, key="look_col", label_visibility="collapsed")
+    show_all = c2.toggle("Show all", key="look_all", help="Off = the 15 most-used looks.")
     cols = {"Personnel": ["PERSONNEL"], "Formation": ["OFF FORM"], "Backfield": ["BACKFIELD"],
             "Personnel + formation": ["PERSONNEL", "OFF FORM"], "Formation family": ["FORM BASE"]}[look]
-    show(summarize(d, cols, ("CALL GROUP", "CONCEPT")), caption=(
-        "Read = how sure the run/pass lean is. Success, EPA, yards and explosives exclude penalty snaps."))
+    show_split_rows(groups(d, cols, limit=None if show_all else 15), look, top_col="CONCEPT",
+                    extra=[("Yds/play", lambda g: g.loc[g["live"], "GN/LS"].mean(), "num"),
+                           ("Explosive", lambda g: g.loc[g["live"], "explosive_play"].mean(), "pct")],
+                    caption="Success, EPA, yards and explosives exclude penalty snaps. Faded rows have under 5 plays.")
 
-    c1, c2 = st.columns(2)
-    for col, dn in ((c1, 3), (c2, 4)):
-        with col:
-            x = snaps(d_any_down[d_any_down["DN"] == dn])
-            rows = []
-            for dist in bd.DISTANCE_ORDER:
-                g = x[x["Distance"] == dist]
-                if len(g):
-                    live = g[g["live"]]
-                    rows.append({"Distance": dist, "Plays": len(g), "Run": (1 - g["PASS"].mean()) * 100,
-                                 "Pass": g["PASS"].mean() * 100, "Conv rate": live["converted"].mean() * 100,
-                                 "Converted": int(live["converted"].sum()),
-                                 "Top call": (lambda v: f"{v[0]} ({v[1]:.0%})" if v[0] else "")(top_share(g["CALL GROUP"]))})
-            show(pd.DataFrame(rows), f"{['3rd', '4th'][dn - 3]} downs")
+    for dn in (3, 4):
+        x = snaps(d_any_down[d_any_down["DN"] == dn])
+        items = [(DIST_LABEL[dist], x[x["Distance"] == dist]) for dist in bd.DISTANCE_ORDER]
+        show_split_rows(items, f"{['3rd', '4th'][dn - 3]} &", f"{['3rd', '4th'][dn - 3]} downs",
+                        extra=[("Conv.", lambda g: g.loc[g["live"], "converted"].mean(), "pct")])
     for dn in (3, 4):
         with st.expander(f"Every {['3rd', '4th'][dn - 3]} down call", expanded=False):
             x = snaps(d_any_down[d_any_down["DN"] == dn]).sort_values(["date", "PLAY #"])
@@ -466,27 +628,33 @@ SEQUENCE_ROWS = [
 
 
 def render_sequencing(d: pd.DataFrame, games: pd.DataFrame):
+    """Dowling-style sequencing: what comes next after each kind of snap, then repeats and the opening script."""
+    team = team_of(games)
+    st.markdown(f"**What {team} calls after...**")
     seq = sequence_frame(games)
     seq = seq[seq.index.isin(d.index)]  # apply the sidebar filters after the previous snap is known
-    if seq.empty:
-        st.info("No plays match the current filters.")
+    if len(seq) < 10:
+        st.info("Not enough plays match the current filters.")
         return
     base = seq["PASS"].mean()
-    rows = []
-    for name, rule in SEQUENCE_ROWS:
-        s = seq[rule(seq).fillna(False).astype(bool)]
-        if len(s) == 0:
-            continue
-        p = s["PASS"].mean()
-        k = round(max(p, 1 - p) * len(s))
-        v, sh, _ = top_share(s["CALL GROUP"])
-        rows.append({"Previous snap": name, "Plays": len(s), "Run": (1 - p) * 100, "Pass": p * 100,
-                     "Read": grade_word(k, len(s)), "Pass vs usual": f"{(p - base) * 100:+.0f} pts",
-                     "Top call": f"{v} ({sh:.0%})" if v else "", "Success": s[s["live"]]["success"].mean() * 100,
-                     "EPA/play": s[s["live"]]["epa"].mean()})
-    show(pd.DataFrame(rows), f"What {team_of(games)} calls after...",
-         f"Usual pass rate in these filters: {base:.0%}. Previous snap = the snap before in the same drive, "
-         "even if the filters hide it.")
+
+    # Headline: does the previous play type move the next call?
+    a, b = seq[seq["prev_type"] == "Run"], seq[seq["prev_type"] == "Pass"]
+    if len(a) >= 10 and len(b) >= 10:
+        pa, pb = a["PASS"].mean(), b["PASS"].mean()
+        z = _two_prop_z(b["PASS"].sum(), len(b), a["PASS"].sum(), len(a))
+        verdict = "a real pattern at this sample size" if abs(z) >= 1.645 else "could still be noise at this sample size"
+        if abs(pb - pa) >= 0.05:
+            st.html(f'<div style="font-size:14px;margin-bottom:6px">Throws <b>{pb:.0%}</b> after a pass vs '
+                    f'<b>{pa:.0%}</b> after a run ({len(b)} and {len(a)} plays): {verdict}.</div>')
+        else:
+            st.html(f'<div style="font-size:14px;margin-bottom:6px">The previous call barely moves the next one: '
+                    f'<b>{pb:.0%}</b> pass after a pass, <b>{pa:.0%}</b> after a run.</div>')
+
+    items = [(name, seq[rule(seq).fillna(False).astype(bool)]) for name, rule in SEQUENCE_ROWS]
+    show_split_rows(items, "Previous snap", base_pass=base, top_col="CONCEPT", caption=(
+        f'"Usual" = {base:.0%} pass across all these plays. Previous snap = the run or pass right before, in the same '
+        f"drive, even if the filters hide it. Faded rows have under {TELL_MIN_N} plays."))
 
     # Same-concept repeats
     rep = seq[seq["prev_concept"].notna()]
@@ -494,31 +662,112 @@ def render_sequencing(d: pd.DataFrame, games: pd.DataFrame):
         same = (rep["CONCEPT"] == rep["prev_concept"]).mean()
         after_good = rep[rep["prev_gain"] >= 5]
         same_good = (after_good["CONCEPT"] == after_good["prev_concept"]).mean() if len(after_good) else np.nan
-        c = st.columns(2)
+        after_bad = rep[rep["prev_gain"] <= 0]
+        same_bad = (after_bad["CONCEPT"] == after_bad["prev_concept"]).mean() if len(after_bad) else np.nan
+        c = st.columns(3)
         c[0].metric("Back-to-back same concept", f"{same:.0%}", help="Share of snaps that repeat the previous concept.")
-        c[1].metric("…after the first one gained 5+", "–" if pd.isna(same_good) else f"{same_good:.0%}",
-                    help=f"{len(after_good)} snaps")
+        c[1].metric("…after it gained 5+", "–" if pd.isna(same_good) else f"{same_good:.0%}",
+                    help=f"{len(after_good)} snaps. Do they go back to what just worked?")
+        c[2].metric("…after it gained 0 or less", "–" if pd.isna(same_bad) else f"{same_bad:.0%}",
+                    help=f"{len(after_bad)} snaps.")
 
+    render_opening_script(games)
+
+
+def opening_script_html(games: pd.DataFrame, n_open: int) -> str:
+    """Snap-by-snap grid of each game's opening calls: one column per game, each cell colored run/pass."""
+    op = snaps(games).sort_values(["date", "PLAY #"])
+    op = op.assign(n=op.groupby("game_id").cumcount() + 1)
+    op = op[op["n"] <= n_open]
+    order = games.drop_duplicates("game_id").sort_values("date")
+    labels = list(order["game_label"])
+    grid = f"display:grid;grid-template-columns:28px repeat({len(labels)},minmax(150px,1fr));gap:4px"
+    cells = ["<div></div>"] + [f'<div style="font-size:11px;font-weight:600;text-align:center">'
+                               f'{esc(l.split(" · ", 1)[-1])}</div>' for l in labels]
+    for i in range(1, n_open + 1):
+        cells.append(f'<div style="font-size:11px;opacity:.6;align-self:center;text-align:right">{i}</div>')
+        for gid in order["game_id"]:
+            r = op[(op["game_id"] == gid) & (op["n"] == i)]
+            if r.empty:
+                cells.append('<div></div>')
+                continue
+            r = r.iloc[0]
+            col = RUN_COLOR if r["PLAY TYPE"] == "Run" else PASS_COLOR
+            gain = "" if pd.isna(r["GN/LS"]) else f'{int(r["GN/LS"]):+d}'
+            if r["interception"]:
+                gain = "INT"
+            elif r["PASS RESULT"] == "I":
+                gain = "Inc"
+            elif r["PASS RESULT"] == "F":
+                gain = "Penalty"
+            elif r["SACK"]:
+                gain = f"Sack {gain}"
+            sit = f'{DN_LABEL.get(r["DN"], "")}&amp;{"" if pd.isna(r["DIST"]) else int(r["DIST"])}'
+            cells.append(
+                f'<div title="{esc(r["PERSONNEL"])} {esc(r["OFF FORM"])} · {esc(r["OFF PLAY"])} · {esc(r["CALL GROUP"])}" '
+                f'style="border-radius:6px;padding:4px 7px;font-size:11px;line-height:1.3;color:#fff;background:{col}">'
+                f'<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+                f'{esc(r["OFF PLAY"] or r["PLAY TYPE"])}</div>'
+                f'<div style="opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{sit} · '
+                f'{esc(r["PERSONNEL"])} {esc(r["OFF FORM"])} · {gain}</div></div>')
+    return (LEGEND.replace("tell = 70%+ one way and still 70%+ at the low end of a 90% interval · lean = low end 55%+",
+                           "hover a box for the full call")
+            + f'<div style="overflow-x:auto"><div style="{grid};min-width:{40 + 154 * len(labels)}px">'
+            + "".join(cells) + "</div></div>")
+
+
+def render_opening_script(games: pd.DataFrame):
     st.markdown("**Opening script**")
     n_open = st.slider("First N snaps of each game", 5, 20, 10, key="script_n")
     op = snaps(games).sort_values(["date", "PLAY #"]).groupby("game_id").head(n_open)
-    if len(op):
-        p = op["PASS"].mean()
-        grp = op["CALL GROUP"].value_counts(normalize=True).mul(100).round(0).astype(int)
-        st.caption(f"Across {op['game_id'].nunique()} games, the first {n_open} snaps were {p:.0%} pass. "
-                   + " · ".join(f"{k} {v}%" for k, v in grp.items()))
-        wide = op.assign(n=op.groupby("game_id").cumcount() + 1,
-                         call=lambda x: x["PERSONNEL"].fillna("?") + " " + x["OFF FORM"].fillna("?") + " — "
-                         + x["OFF PLAY"].fillna(x["PLAY TYPE"]))
-        piv = wide.pivot_table(index="n", columns="game_label", values="call", aggfunc="first")
-        piv = piv[sorted(piv.columns, key=lambda c: games.loc[games["game_label"] == c, "date"].iat[0])]
-        st.dataframe(piv, width="stretch")
-        st.caption("Uses whole games, so the sidebar filters (other than game) don't apply here.")
+    if op.empty:
+        return
+    p = op["PASS"].mean()
+    grp = op["CALL GROUP"].value_counts(normalize=True)
+    st.caption(f"Across {op['game_id'].nunique()} games, the first {n_open} snaps were {p:.0%} pass. "
+               + " · ".join(f"{k} {v:.0%}" for k, v in grp.items()))
+    st.html(opening_script_html(games, n_open))
+    st.caption("Uses whole games, so the sidebar filters (other than game) don't apply here.")
 
 
 # ==============================================================================
 # 5. Field position
 # ==============================================================================
+DRIVE_RESULTS = [("Touchdown", ("Touchdown",), "#1D9E75"), ("Field goal", ("FG Made",), "#BA7517"),
+                 ("Punt", ("Punt",), "#888780"), ("Turnover", ("Turnover", "Turnover on Downs"), "#A32D2D"),
+                 ("Other", ("FG Missed", "End of Half", "End of Game", "Unknown"), "#C9C7BF")]
+
+
+def drive_results_html(drives: pd.DataFrame) -> str:
+    """One stacked bar per starting zone: how the drives ended, with points per drive at the end."""
+    leg = "".join(f'<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{c};'
+                  f'margin-right:4px"></span>{n}</span>' for n, _, c in DRIVE_RESULTS)
+    rows = []
+    for zone in bd.ZONE_ORDER:
+        g = drives[drives["start_zone"] == zone]
+        n = len(g)
+        if n == 0:
+            continue
+        segs = []
+        for name, res, col in DRIVE_RESULTS:
+            k = int(g["result"].isin(res).sum())
+            if k:
+                segs.append(f'<span title="{name}: {k} of {n}" style="width:{k / n * 100:.1f}%;background:{col};'
+                            f'color:#fff;font-size:11px;text-align:center;line-height:22px;overflow:hidden">'
+                            f'{k / n:.0%}</span>' if k / n >= .1 else
+                            f'<span title="{name}: {k} of {n}" style="width:{k / n * 100:.1f}%;background:{col}"></span>')
+        rows.append(f'<div style="display:grid;grid-template-columns:minmax(120px,1fr) minmax(200px,4fr) 150px;'
+                    f'gap:10px;align-items:center;padding:5px 0;{GRID_ROW};font-size:13px">'
+                    f'<div><b>{zone}</b><div style="font-size:11px;opacity:.6">{n} drives</div></div>'
+                    f'<div style="display:flex;gap:2px;height:22px;border-radius:4px;overflow:hidden">{"".join(segs)}</div>'
+                    f'<div style="font-size:12px"><b>{g["points"].mean():.1f}</b> pts/drive · '
+                    f'{g["yards"].mean():.0f} yds · {g["plays"].mean():.1f} plays</div></div>')
+    if not rows:
+        return ""
+    return (f'<div style="display:flex;flex-wrap:wrap;gap:12px;font-size:12px;margin:2px 0 6px">{leg}</div>'
+            f'<div style="overflow-x:auto"><div style="min-width:560px">{"".join(rows)}</div></div>')
+
+
 def render_field_position(d: pd.DataFrame, drives: pd.DataFrame):
     x = snaps(d)
     if x.empty:
@@ -549,24 +798,12 @@ def render_field_position(d: pd.DataFrame, drives: pd.DataFrame):
     st.caption("Zones by where the ball was snapped. Faded = under 10 plays.")
 
     if not drives.empty:
-        rows = []
-        for name in bd.ZONE_ORDER:
-            g = drives[drives["start_zone"] == name]
-            if len(g):
-                rows.append({"Drive start": name, "Drives": len(g), "Points/drive": g["points"].mean(),
-                             "TD %": (g["result"] == "Touchdown").mean() * 100,
-                             "Punt %": (g["result"] == "Punt").mean() * 100,
-                             "Turnover %": g["result"].isin(["Turnover", "Turnover on Downs"]).mean() * 100,
-                             "Avg yards": g["yards"].mean(), "Avg plays": g["plays"].mean()})
-        t = pd.DataFrame(rows)
-        st.markdown("**Drives by starting field position**")
-        st.dataframe(t, hide_index=True, width="stretch", column_config={
-            "Points/drive": st.column_config.NumberColumn(format="%.1f"),
-            "Avg yards": st.column_config.NumberColumn(format="%.0f"),
-            "Avg plays": st.column_config.NumberColumn(format="%.1f"),
-            **{c: st.column_config.NumberColumn(format="%.0f%%") for c in ("TD %", "Punt %", "Turnover %")}})
+        st.markdown("**How drives end, by starting field position**")
+        h = drive_results_html(drives)
+        if h:
+            st.html(h)
         st.caption("Start = first snap of the series (these files don't include the kick that set it up). "
-                   "Whole drives in the selected games.")
+                   "Whole drives in the selected games. Hover a segment for the count.")
 
 
 # ==============================================================================
@@ -590,26 +827,21 @@ def render_red_zone(d: pd.DataFrame, drives: pd.DataFrame):
                       for r, col in RZ_RESULTS if r in res)
         leg = "".join(f'<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;'
                       f'background:{col};margin-right:4px"></span>{r} {res[r]}</span>' for r, col in RZ_RESULTS if r in res)
-        st.html(f'<div style="display:flex;height:14px;border-radius:4px;overflow:hidden;margin:4px 0 6px">{seg}</div>'
+        st.html(f'<div style="display:flex;gap:2px;height:14px;border-radius:4px;overflow:hidden;margin:4px 0 6px">{seg}</div>'
                 f'<div style="display:flex;flex-wrap:wrap;gap:12px;font-size:12px">{leg}</div>')
 
     rz = snaps(d)
     rz = rz[rz["YARDLINE_100"] <= 20]
     if rz.empty:
         return
-    rows = []
-    for name, lo, hi in RZ_BANDS:
-        b = rz[rz["YARDLINE_100"].between(lo, hi)]
-        if len(b):
-            live = b[b["live"]]
-            v, sh, _ = top_share(b["CONCEPT"])
-            rows.append({"Zone": name, "Plays": len(b), "Run": (1 - b["PASS"].mean()) * 100, "Pass": b["PASS"].mean() * 100,
-                         "Success": live["success"].mean() * 100, "EPA/play": live["epa"].mean(),
-                         "TD rate": live["touchdown"].mean() * 100, "Top concept": f"{v} ({sh:.0%})"})
-    show(pd.DataFrame(rows), "How it's called inside the 20")
-    show(summarize(rz, "PERSONNEL", ("OFF FORM", "CONCEPT")), "Personnel inside the 20")
-    show(summarize(rz, "OFF FORM", ("CONCEPT",)), "Formations inside the 20")
-    show(summarize(rz, "CONCEPT", ("OFF FORM",)), "Concepts inside the 20")
+    show_split_rows([(name, rz[rz["YARDLINE_100"].between(lo, hi)]) for name, lo, hi in RZ_BANDS], "Zone",
+                    "How it's called inside the 20", top_col="CONCEPT",
+                    extra=[("TD rate", lambda g: g.loc[g["live"], "touchdown"].mean(), "pct")])
+    view = st.radio("Inside the 20 by", ["Personnel", "Formation", "Concept"], horizontal=True, key="rz_by")
+    col, top = {"Personnel": ("PERSONNEL", "OFF FORM"), "Formation": ("OFF FORM", "CONCEPT"),
+                "Concept": ("CONCEPT", "OFF FORM")}[view]
+    show_split_rows(groups(rz, col, limit=12), view, top_col=top,
+                    extra=[("TD rate", lambda g: g.loc[g["live"], "touchdown"].mean(), "pct")])
     gl = rz[(rz["goal_to_go"] == 1)].sort_values(["date", "PLAY #"])
     with st.expander(f"Every goal-to-go snap ({len(gl)})"):
         show_plays(gl, "Goal-to-go, oldest first", extra={"TD": gl["touchdown"].map({1: "TD", 0: ""}).values})
@@ -623,41 +855,39 @@ def render_personnel_motion(d: pd.DataFrame):
     if x.empty:
         st.info("No plays match the current filters.")
         return
-    st.markdown("**Personnel usage by down**")
-    mix = pd.crosstab(x["DN"].map({1: "1st", 2: "2nd", 3: "3rd", 4: "4th"}), x["PERSONNEL"].fillna("untagged"),
-                      normalize="index").mul(100)
-    mix["Plays"] = x.groupby(x["DN"].map({1: "1st", 2: "2nd", 3: "3rd", 4: "4th"})).size()
-    st.dataframe(mix.reset_index().rename(columns={"DN": "Down"}), hide_index=True, width="stretch",
-                 column_config={c: st.column_config.NumberColumn(c, format="%.0f%%")
-                                for c in mix.columns if c != "Plays"})
-    show(summarize(x, "PERSONNEL", ("OFF FORM", "BACKFIELD", "CONCEPT")), "Personnel groupings")
+    pers_order = list(x["PERSONNEL"].fillna("untagged").value_counts().index)
+    dn = x["DN"].map(DN_LABEL)
+    mix = pd.crosstab(dn, x["PERSONNEL"].fillna("untagged"), normalize="index")[pers_order]
+    show_heat(mix, "Personnel usage by down", row_header="Down", total_col=x.groupby(dn).size(),
+              caption="Share of each down's snaps in each personnel group (row adds to 100%).")
+    show_split_rows(groups(x, "PERSONNEL"), "Personnel", "Personnel groupings", top_col="OFF FORM",
+                    extra=[("Motion", lambda g: g["has_motion"].mean(), "pct")])
 
-    st.markdown("**Formations by personnel**")
-    pf = pd.crosstab(x["OFF FORM"].fillna("untagged"), x["PERSONNEL"].fillna("untagged"))
+    pf = pd.crosstab(x["OFF FORM"].fillna("untagged"), x["PERSONNEL"].fillna("untagged"))[pers_order]
     pf = pf.loc[pf.sum(axis=1).sort_values(ascending=False).index]
-    st.dataframe(pf, width="stretch")
-    st.caption("Counts. A formation that only shows up from one personnel group is a substitution tell.")
+    show_heat(pf.head(20), "Formations by personnel", kind="int", row_header="Formation",
+              total_col=pf.sum(axis=1), caption="Counts (top 20 formations). A formation that only shows up from "
+                                                "one personnel group is a substitution tell.")
 
     st.divider()
     m = x.copy()
-    m["MOTION"] = m["MOTION"].fillna("No motion")
     rate = m["has_motion"].mean()
     c = st.columns(3)
     c[0].metric("Motion rate", f"{rate:.0%}")
     c[1].metric("Run rate with motion", f"{1 - m.loc[m['has_motion'] == 1, 'PASS'].mean():.0%}"
                 if (m["has_motion"] == 1).any() else "–")
     c[2].metric("Run rate without", f"{1 - m.loc[m['has_motion'] == 0, 'PASS'].mean():.0%}")
-    show(summarize(m, "MOTION", ("PERSONNEL", "OFF FORM", "CONCEPT")), "What follows each motion")
-    show(summarize(m[m["has_motion"] == 1], "MOTION PLAYER", ("MOTION TYPE", "CONCEPT")), "Who motions")
-    by = m.groupby(["PERSONNEL"]).agg(Plays=("snap", "size"), Motion=("has_motion", "mean")).reset_index()
-    by["Motion"] *= 100
-    byf = m.groupby(["OFF FORM"]).agg(Plays=("snap", "size"), Motion=("has_motion", "mean")).reset_index()
-    byf["Motion"] *= 100
+    m["MOTION"] = m["MOTION"].fillna("No motion")
+    show_split_rows(groups(m, "MOTION", limit=15), "Motion", "What follows each motion", top_col="CONCEPT")
+    show_split_rows(groups(m[m["has_motion"] == 1], "MOTION PLAYER"), "Player", "Who motions", top_col="MOTION TYPE")
     c1, c2 = st.columns(2)
     with c1:
-        show(by, "Motion rate by personnel")
+        items = [(p, g["has_motion"].mean(), f"of {len(g)}", PASS_COLOR) for p, g in groups(m, "PERSONNEL")]
+        show_hbars(items, "Motion rate by personnel", vmax=1)
     with c2:
-        show(byf[byf["Plays"] >= 3].sort_values("Motion", ascending=False), "Motion rate by formation (3+ plays)")
+        items = [(f, g["has_motion"].mean(), f"of {len(g)}", PASS_COLOR) for f, g in groups(m, "OFF FORM", min_n=3)]
+        items = sorted(items, key=lambda i: -i[1])[:15]
+        show_hbars(items, "Motion rate by formation (3+ plays)", vmax=1)
 
 
 # ==============================================================================
@@ -763,18 +993,19 @@ def render_protection(d: pd.DataFrame):
     t = pd.DataFrame(rows).sort_values("Plays", ascending=False)
     show(t.rename(columns={"3rd down share": "On 3rd %"}), "Pass protections (RPO and screen blocking left out)")
 
-    st.markdown("**Protection by down & distance**")
-    real = real.assign(Situation=real["DN"].map({1: "1st", 2: "2nd", 3: "3rd", 4: "4th"}) + " & "
+    real = real.assign(Situation=real["DN"].map(DN_LABEL) + " & "
                        + real["Distance"].fillna("?").str.replace(r" \(.*\)", "", regex=True))
-    ct = pd.crosstab(real["Situation"], real["PROTECTION"], normalize="index").mul(100).round(0)
-    ct.insert(0, "Plays", real.groupby("Situation").size())
-    st.dataframe(ct, width="stretch", column_config={
-        c: st.column_config.NumberColumn(c, format="%.0f%%") for c in ct.columns if c != "Plays"})
-    st.markdown("**Protection by call group**")
-    ct2 = pd.crosstab(real["CALL GROUP"], real["PROTECTION"])
-    st.dataframe(ct2, width="stretch")
-    st.caption("Counts. Use with the pressure plan: e.g. which protection shows up on 3rd & long, and whether "
-               "max protection only comes with play-action shots.")
+    prot_order = list(real["PROTECTION"].value_counts().index)
+    sit_order = [f"{DN_LABEL[dn]} & {dist.split(' (')[0]}" for dn in (1, 2, 3, 4) for dist in bd.DISTANCE_ORDER]
+    ct = pd.crosstab(real["Situation"], real["PROTECTION"], normalize="index")[prot_order]
+    ct = ct.reindex([s_ for s_ in sit_order if s_ in ct.index])
+    show_heat(ct, "Protection by down & distance", row_header="Situation",
+              total_col=real.groupby("Situation").size(), caption="Share of each situation's passes (row adds to 100%).")
+    ct2 = pd.crosstab(real["CALL GROUP"], real["PROTECTION"])[prot_order]
+    show_heat(ct2, "Protection by call group", kind="int", row_header="Call group",
+              total_col=ct2.sum(axis=1),
+              caption="Counts. Use with the pressure plan: e.g. which protection shows up on 3rd & long, and whether "
+                      "max protection only comes with play-action shots.")
 
 
 # ==============================================================================
@@ -834,10 +1065,11 @@ def render_predictor(d: pd.DataFrame):
             f'{badge(k, len(match))}</div>{split_bar(run, 10)}')
     c1, c2 = st.columns(2)
     for col, oc, title in ((c1, "CALL GROUP", "Call group"), (c2, "CONCEPT", "Concept")):
-        vc = match[oc].value_counts()
-        t = pd.DataFrame({title: vc.index, "Plays": vc.values, "Share": vc.values / vc.sum() * 100})
+        tot = match[oc].notna().sum()
+        items = [(val, len(g) / tot, f"{len(g)} plays", type_color(g))
+                 for val, g in sorted(match.dropna(subset=[oc]).groupby(oc), key=lambda kv: -len(kv[1]))[:8]]
         with col:
-            show(t.head(8), title)
+            show_hbars(items, title)
     show_plays(match.sort_values("date", ascending=False).head(25), "The matching snaps (newest first)")
 
 
@@ -855,6 +1087,43 @@ def profile(g: pd.DataFrame) -> dict:
             "Points / drive": bd.drive_table(g)["points"].mean()}
 
 
+THEN_COLOR = "#888780"
+
+
+def dumbbell_html(then: pd.Series, now: pd.Series, then_label: str, now_label: str, n: int = 8) -> str:
+    """Share of each value then vs now: a gray dot, a purple dot, and the line between them."""
+    a = then.value_counts(normalize=True)
+    b = now.value_counts(normalize=True)
+    m = pd.DataFrame({"a": a, "b": b}).fillna(0)
+    m = m.loc[m.max(axis=1).sort_values(ascending=False).index].head(n)
+    if m.empty:
+        return ""
+    vmax = max(m.max().max(), 0.05)
+    dot = "position:absolute;top:50%;width:10px;height:10px;border-radius:50%;transform:translate(-50%,-50%);" \
+          "box-shadow:0 0 0 2px var(--background-color, #fff)"
+    rows = []
+    for k, r in m.iterrows():
+        x1, x2 = r["a"] / vmax * 100, r["b"] / vmax * 100
+        lo, hi = min(x1, x2), max(x1, x2)
+        chg = (r["b"] - r["a"]) * 100
+        rows.append(f'<div title="{esc(k)}: {r["a"]:.0%} {esc(then_label)} → {r["b"]:.0%} {esc(now_label)}" '
+                    f'style="display:grid;grid-template-columns:minmax(80px,1fr) minmax(110px,2fr) 44px;gap:8px;'
+                    f'align-items:center;padding:4px 0;font-size:12px">'
+                    f'<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{esc(k)}</div>'
+                    f'<div style="position:relative;height:14px;margin:0 6px">'
+                    f'<span style="position:absolute;top:50%;left:{lo:.1f}%;width:{hi - lo:.1f}%;height:2px;'
+                    f'background:rgba(128,128,128,.5);transform:translateY(-50%)"></span>'
+                    f'<span style="{dot};left:{x1:.1f}%;background:{THEN_COLOR}"></span>'
+                    f'<span style="{dot};left:{x2:.1f}%;background:{PASS_COLOR}"></span></div>'
+                    f'<div style="text-align:right;opacity:{1 if abs(chg) >= 5 else .5}">{chg:+.0f}</div></div>')
+    leg = (f'<div style="display:flex;gap:12px;font-size:11px;opacity:.8;margin-bottom:4px">'
+           f'<span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:{THEN_COLOR};'
+           f'margin-right:4px"></span>{esc(then_label)}</span><span><span style="display:inline-block;width:9px;'
+           f'height:9px;border-radius:50%;background:{PASS_COLOR};margin-right:4px"></span>{esc(now_label)}</span>'
+           f'<span style="margin-left:auto">pts</span></div>')
+    return leg + "".join(rows)
+
+
 def render_last_meeting(games_all: pd.DataFrame, our_team: str = bd.OUR_TEAM):
     vs = games_all[games_all["opponent"].str.lower() == our_team.lower()]
     if vs.empty:
@@ -870,22 +1139,26 @@ def render_last_meeting(games_all: pd.DataFrame, our_team: str = bd.OUR_TEAM):
     label_o = f"Since then ({other['game_id'].nunique()} games)"
     st.markdown(f"**How {team_of(games_all)} attacked {our_team} ({label_m}) vs. what they've done since**")
 
-    t = pd.DataFrame({label_m: profile(meet), label_o: profile(other)})
-    t["Change"] = t[label_o] - t[label_m]
-    st.dataframe(t.round(2), width="stretch")
+    pm, po = profile(meet), profile(other)
+    fmt = {"Snaps / game": "{:.0f}", "EPA/play": "{:+.2f}", "Points / drive": "{:.1f}"}
+    cols = st.columns(4)
+    for i, (k, now) in enumerate(po.items()):
+        then = pm[k]
+        f = fmt.get(k, "{:.0f}%")
+        unit = "" if k in fmt else " pts"
+        delta = None if pd.isna(now) or pd.isna(then) else f"{(now - then):+.{2 if k == 'EPA/play' else 1 if k == 'Points / drive' else 0}f}{unit} since"
+        cols[i % 4].metric(k.replace(" %", ""), "–" if pd.isna(then) else f.format(then), delta, delta_color="off",
+                           help=f"vs {our_team}: {'–' if pd.isna(then) else f.format(then)} · "
+                                f"since: {'–' if pd.isna(now) else f.format(now)}")
+    st.caption(f"Big number = the {our_team} game; the arrow = how much it has moved in the {other['game_id'].nunique()} "
+               "games since.")
 
-    def mix(col, n=10):
-        a = snaps(meet)[col].value_counts(normalize=True).mul(100)
-        b = snaps(other)[col].value_counts(normalize=True).mul(100)
-        m = pd.DataFrame({f"vs {our_team} %": a, "Since %": b}).fillna(0)
-        m["Change"] = m["Since %"] - m[f"vs {our_team} %"]
-        return m.sort_values("Since %", ascending=False).head(n).round(0).reset_index().rename(columns={col: ""})
     c = st.columns(3)
     for col, (title, field) in zip(c, [("Personnel", "PERSONNEL"), ("Call group", "CALL GROUP"),
                                        ("Formation", "OFF FORM")]):
         with col:
             st.markdown(f"**{title} mix**")
-            st.dataframe(mix(field), hide_index=True, width="stretch")
+            st.html(dumbbell_html(snaps(meet)[field], snaps(other)[field], f"vs {our_team}", "Since"))
     new = set(snaps(other)["CONCEPT"].dropna()) - set(snaps(meet)["CONCEPT"].dropna())
     newf = set(snaps(other)["OFF FORM"].dropna()) - set(snaps(meet)["OFF FORM"].dropna())
     if new or newf:
@@ -899,88 +1172,6 @@ def render_last_meeting(games_all: pd.DataFrame, our_team: str = bd.OUR_TEAM):
         show_plays(live.nlargest(8, "epa"), f"What hurt {our_team} most")
     with c2:
         show_plays(live.nsmallest(8, "epa"), f"Where {our_team} won")
-
-
-# ==============================================================================
-# Compare teams (new): every scouted offense side by side, plus common opponents
-# ==============================================================================
-SITUATIONS = [("1st & 10", lambda d: (d["DN"] == 1) & (d["DIST"] == 10)),
-              ("1st & other", lambda d: (d["DN"] == 1) & (d["DIST"] != 10)),
-              ("2nd & 1-3", lambda d: (d["DN"] == 2) & (d["DIST"] <= 3)),
-              ("2nd & 4-6", lambda d: (d["DN"] == 2) & d["DIST"].between(4, 6)),
-              ("2nd & 7+", lambda d: (d["DN"] == 2) & (d["DIST"] >= 7)),
-              ("3rd & 1-3", lambda d: (d["DN"] == 3) & (d["DIST"] <= 3)),
-              ("3rd & 4-6", lambda d: (d["DN"] == 3) & d["DIST"].between(4, 6)),
-              ("3rd & 7+", lambda d: (d["DN"] == 3) & (d["DIST"] >= 7)),
-              ("Red zone", lambda d: d["YARDLINE_100"] <= 20)]
-
-
-def render_compare(plays_all: pd.DataFrame, our_team: str = bd.OUR_TEAM):
-    teams = bd.teams_by_recency(plays_all)
-    if len(teams) < 2:
-        st.info("Only one team's games are loaded. Add another team's breakdowns to compare.")
-        return
-    latest = int(plays_all["season"].max())
-    this_season = st.toggle(f"{latest} games only", value=True, key="cmp_season")
-    x = plays_all[plays_all["season"] == latest] if this_season else plays_all
-    x = x[x["opponent"].str.lower() != our_team.lower()] if this_season else x
-    teams = [t for t in teams if (x["team"] == t).any()]
-
-    prof = pd.DataFrame({f"{t} ({x.loc[x['team'] == t, 'game_id'].nunique()} g)": profile(x[x["team"] == t])
-                         for t in teams})
-    st.markdown("**Offense profile**")
-    st.dataframe(prof.round(2), width="stretch")
-
-    st.markdown("**Pass rate by situation**")
-    rows = []
-    for name, rule in SITUATIONS:
-        row = {"Situation": name}
-        for t in teams:
-            s = snaps(x[x["team"] == t])
-            g = s[rule(s).fillna(False).astype(bool)]
-            row[t] = f"{g['PASS'].mean():.0%} ({len(g)})" if len(g) else "–"
-        rows.append(row)
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-    st.caption("Pass share of run/pass calls (snaps in parentheses).")
-
-    s = snaps(x)
-    mix = (s.groupby("team")["CALL GROUP"].value_counts(normalize=True).mul(100).rename("Share").reset_index())
-    fig = px.bar(mix, x="Share", y="CALL GROUP", color="team", barmode="group", orientation="h",
-                 category_orders={"CALL GROUP": ["Run"] + bd.PASS_GROUP_ORDER + ["Other pass"], "team": teams},
-                 labels={"Share": "% of snaps", "CALL GROUP": "", "team": ""})
-    fig.update_layout(height=360, margin=dict(t=10, l=0, r=0, b=0), legend=dict(orientation="h", y=1.08))
-    st.markdown("**Call mix**")
-    st.plotly_chart(fig, width="stretch")
-
-    c1, c2 = st.columns(2)
-    for col, field, title in ((c1, "PERSONNEL", "Personnel"), (c2, "OFF FORM", "Top formations")):
-        m = pd.crosstab(s[field].fillna("untagged"), s["team"], normalize="columns").mul(100).round(0)
-        m = m[[t for t in teams if t in m.columns]]
-        m = m.loc[m.max(axis=1).sort_values(ascending=False).index].head(10)
-        with col:
-            st.markdown(f"**{title}** (% of each team's snaps)")
-            st.dataframe(m, width="stretch")
-
-    # Common opponents: the same defense against each offense.
-    opp_teams = x.groupby("opponent")["team"].nunique()
-    common = sorted(opp_teams[opp_teams > 1].index)
-    st.markdown("**Common opponents**")
-    if not common:
-        st.caption("No opponent shows up for more than one team in these games.")
-        return
-    rows = []
-    for opp in common:
-        for t in teams:
-            g = x[(x["opponent"] == opp) & (x["team"] == t)]
-            if g.empty:
-                continue
-            r = g.iloc[0]
-            rows.append({"Opponent": opp, "Team": t,
-                         "Game": f"{'vs' if r['home_away'] == 'Home' else '@'} {opp} {r['date'].month}/{r['date'].day}",
-                         **{k: val for k, val in profile(g).items() if k != "Motion %"}})
-    t = pd.DataFrame(rows).rename(columns={"Snaps / game": "Snaps"})
-    show(t, caption="Same defense, different offenses: a rough read on which offense moved the ball better. "
-                    "One game each, so treat small gaps as noise.")
 
 
 # ==============================================================================
@@ -1025,7 +1216,6 @@ SIDELINE_CSS = """
 </style>
 """
 PRE_SNAP_LATE = {"BACKFIELD", "MOTION"}  # seen at the line, after personnel and formation are known
-DN_LABEL = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th"}
 DIST_LABEL = {"Short (1-3)": "1-3", "Medium (4-6)": "4-6", "Long (7-10)": "7-10", "Extra Long (11+)": "11+"}
 
 

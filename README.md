@@ -25,8 +25,7 @@ straight to that team's scout.
 Replicated: Tendencies, Tendency tree, Field & strength, Sequencing, Field position, Red zone.
 New: Personnel & motion, Pre-snap tells, Protection, Call predictor, Last meeting vs Wartburg, Play log.
 
-Pages: Scout, Sideline, Scouting report (PDF), Compare teams (every loaded offense side by side: profile,
-pass rate by situation, call/personnel/formation mix, and games against common opponents).
+Pages: Scout, Sideline, Scouting report (PDF).
 
 ## Assumptions (confirm with the client)
 - PASS RESULT: C complete, I incomplete, S sack, X interception, R run (scramble / RPO give),

@@ -4,8 +4,7 @@ Wartburg football — Scout Opposing Offenses (Buena Vista, Loras, ...).
 Run with:  streamlit run app.py
 Game files go in ./data (one offense breakdown .xlsx per game, any team), or upload them in the sidebar.
 The team comes from each file's title row; pick the team at the top of the sidebar (or ?team=Loras in the URL).
-Pages: Scout (every tab), Sideline (one situation at a time, phone-friendly), Scouting report (one-page PDF),
-Compare teams (every loaded offense side by side, plus common opponents).
+Pages: Scout (every tab), Sideline (one situation at a time, phone-friendly), Scouting report (one-page PDF).
 """
 from __future__ import annotations
 
@@ -64,7 +63,7 @@ if plays_all.empty:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# Team (every page works on one scouted team; Compare teams uses them all)
+# Team (every page works on one scouted team)
 # ------------------------------------------------------------------------------
 TEAMS = bd.teams_by_recency(plays_all)  # most recent game first, so the newest scout is the default
 # Widgets whose options depend on the team; cleared when the team changes so stale picks don't linger.
@@ -232,15 +231,7 @@ def sideline_page():
     v.render_sideline(plays)
 
 
-def compare_page():
-    st.title("Compare teams")
-    st.caption("Every loaded offense side by side. Ignores the team picker.")
-    v.render_compare(plays_all)
-
-
 pg = st.navigation([st.Page(scout_page, title="Scout", icon=":material/search:", default=True),
                     st.Page(sideline_page, title="Sideline", icon=":material/sports_football:", url_path="sideline"),
-                    st.Page(report_page, title="Scouting report", icon=":material/description:", url_path="report"),
-                    st.Page(compare_page, title="Compare teams", icon=":material/compare_arrows:",
-                            url_path="compare")])
+                    st.Page(report_page, title="Scouting report", icon=":material/description:", url_path="report")])
 pg.run()
