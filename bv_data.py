@@ -37,6 +37,14 @@ GAME_FILE_TYPES = (".xlsx", ".xls")
 
 TITLE_RE = re.compile(r"^\s*(\d+)\s+(.+?)\s+O\s+(vs|@)\s+(.+?)\s+(\d{6})\s*$", re.IGNORECASE)
 
+# Excel cuts sheet names at 31 characters, so a sheet-name title can lose its date or the end of the opponent.
+# Full titles for the ones we have (dates from Dubuque's schedule).
+TITLE_FIXES = {"03 DUBUQUE O @ PLATTEVILLE 0912": "03 DUBUQUE O @ PLATTEVILLE 091226",
+               "06 DUBUQUE O vs NEBRASKA WESLEY": "06 DUBUQUE O vs NEBRASKA WESLEYAN 101026"}
+
+# Display names that differ from the file's spelling.
+TEAM_NAMES = {"Stout": "UW-Stout"}
+
 DISTANCE_ORDER = ["Short (1-3)", "Medium (4-6)", "Long (7-10)", "Extra Long (11+)"]
 
 # Field zones by YARDLINE_100 (yards from the opponent's goal), same as the Dowling app.
@@ -112,7 +120,8 @@ def _obj(s: pd.Series) -> pd.Series:
 
 
 def parse_title(title: str) -> dict:
-    m = TITLE_RE.match(str(title).replace("\xa0", " "))
+    title = " ".join(str(title).replace("\xa0", " ").split())
+    m = TITLE_RE.match(TITLE_FIXES.get(title, title))
     if not m:
         raise ValueError(f"Can't read the game title {title!r} (expected e.g. '02 BUENA VISTA O vs BENEDICTINE 090526' or '05 LORAS O @ COE 100326')")
     num, team, loc, opp, mmddyy = m.groups()
@@ -127,9 +136,10 @@ def parse_title(title: str) -> dict:
 
 
 def team_name(raw: str) -> str:
-    """'BUENA VISTA' -> 'Buena Vista', 'MINNESOTA MORRIS' -> 'Minnesota Morris', 'ST OLAF' -> 'St Olaf', 'MCMURRY' -> 'McMurry'."""
+    """'BUENA VISTA' -> 'Buena Vista', 'MINNESOTA MORRIS' -> 'Minnesota Morris', 'MCMURRY' -> 'McMurry', 'STOUT' -> 'UW-Stout'."""
     name = " ".join(str(raw).split()).title().replace("Mn", "MN")
-    return re.sub(r"\bMc(\w)", lambda m: "Mc" + m.group(1).upper(), name)
+    name = re.sub(r"\bMc(\w)", lambda m: "Mc" + m.group(1).upper(), name)
+    return TEAM_NAMES.get(name, name)
 
 
 def read_game(source, name: str | None = None) -> pd.DataFrame:
@@ -242,6 +252,9 @@ def curate(raw: pd.DataFrame, infer_direction: bool = True) -> pd.DataFrame:
     # Naked boots were tagged SPRINT OUT in the 2025 file; the call name is the reliable signal.
     is_naked = d["OFF PLAY"].fillna("").astype(str).str.contains(r"\bNAKED\b") & (d["R/P"] == "P")
     d.loc[is_naked, "CONCEPT"] = "NAKED"
+    # Same for Dubuque's DASH (tagged PAR in the Nebraska Wesleyan file).
+    is_dash = d["OFF PLAY"].fillna("").astype(str).str.contains(r"\bDASH\b") & (d["R/P"] == "P")
+    d.loc[is_dash, "CONCEPT"] = "DASH"
     d["CALL #"] = _call_number(d["OFF PLAY"])
     passes = d[(d["PLAY TYPE"] == "Pass") & d["CONCEPT"].notna() & (d["CONCEPT"] != "STEP")]
     modal = passes.groupby(["team", "CALL #"])["CONCEPT"].agg(lambda s: s.mode().iat[0])  # each team's own numbering
