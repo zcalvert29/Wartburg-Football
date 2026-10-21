@@ -2,7 +2,7 @@
 Wartburg football — Scout Opposing Offenses (Buena Vista, Loras, ...).
 
 Run with:  streamlit run app.py
-Game files go in ./data (one offense breakdown .xlsx per game, any team), or upload them in the sidebar.
+Game files go in ./data (one offense breakdown .xlsx/.xls per game, any team), or upload them in the sidebar.
 The team comes from each file's title row; pick the team at the top of the sidebar (or ?team=Loras in the URL).
 Pages: Scout (every tab), Sideline (one situation at a time, phone-friendly), Scouting report (one-page PDF).
 """
@@ -27,7 +27,8 @@ def load(files: tuple[tuple[str, bytes], ...], infer_direction: bool):
 
 
 def gather_files(uploads) -> tuple[tuple[str, bytes], ...]:
-    files = {p.name: p.read_bytes() for p in sorted(DATA_DIR.glob("*.xlsx")) if not p.name.startswith("~$")}
+    files = {p.name: p.read_bytes() for p in sorted(DATA_DIR.iterdir())
+             if p.suffix.lower() in bd.GAME_FILE_TYPES and not p.name.startswith("~$")}
     for u in uploads or []:
         files[u.name] = u.getvalue()  # an upload with the same name replaces the folder copy
     return tuple(sorted(files.items()))
@@ -42,7 +43,7 @@ filter_box = st.sidebar.container()  # page filters are drawn here, above the da
 with st.sidebar:
     st.divider()
     with st.expander("Data & settings"):
-        uploads = st.file_uploader("Add game files (.xlsx)", type="xlsx", accept_multiple_files=True,
+        uploads = st.file_uploader("Add game files (.xlsx / .xls)", type=["xlsx", "xls"], accept_multiple_files=True,
                                    help="Same layout as the files in /data. Uploads last until the page is "
                                         "closed; drop files in /data to keep them.")
         infer_dir = st.toggle("Read run direction from play number", value=True,

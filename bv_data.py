@@ -3,7 +3,8 @@ Load and curate opponent offensive breakdown files (Buena Vista, Loras, ...).
 
 Each file is one game: row 1 is a title like "02 BUENA VISTA O vs BENEDICTINE 090526"
 (game number, scouted team, home "vs" / away "@", opponent, MMDDYY), row 2 is the header, and every
-row after that is one offensive play (or a no-play row).
+row after that is one offensive play (or a no-play row). Some files (the Dubuque .xls exports) leave the
+title row out and carry the title as the sheet name instead, with the header in row 1.
 
 curate_folder() / curate_files() return a play-level DataFrame (every team's games, with a `team`
 column to split on) with the same core column
@@ -32,7 +33,17 @@ RENAME = {"SER": "SERIES", "S#": "SNAP", "FPOS": "YARD LN", "HASH - D": "HASH", 
           "FORMATION": "OFF FORM", "FORM STR": "OFF STR", "PLAY": "OFF PLAY", "PLAY FAMILY": "CONCEPT",
           "ROUTE TYPE": "ROUTE", "GAIN": "GN/LS"}
 
+GAME_FILE_TYPES = (".xlsx", ".xls")
+
 TITLE_RE = re.compile(r"^\s*(\d+)\s+(.+?)\s+O\s+(vs|@)\s+(.+?)\s+(\d{6})\s*$", re.IGNORECASE)
+
+# Excel cuts sheet names at 31 characters, so a sheet-name title can lose its date or the end of the opponent.
+# Full titles for the ones we have (dates from Dubuque's schedule).
+TITLE_FIXES = {"03 DUBUQUE O @ PLATTEVILLE 0912": "03 DUBUQUE O @ PLATTEVILLE 091226",
+               "06 DUBUQUE O vs NEBRASKA WESLEY": "06 DUBUQUE O vs NEBRASKA WESLEYAN 101026"}
+
+# Display names that differ from the file's spelling.
+TEAM_NAMES = {"Stout": "UW-Stout", "Platteville": "UW-Platteville"}
 
 DISTANCE_ORDER = ["Short (1-3)", "Medium (4-6)", "Long (7-10)", "Extra Long (11+)"]
 
@@ -42,18 +53,19 @@ FP_ZONES = [("Backed up", "Goal to own 20", 80, 99), ("Neutral", "Own 20 to opp 
 ZONE_ORDER = [z[0] for z in FP_ZONES]
 
 # PLAY FAMILY spelling fixes.
-CONCEPT_FIXES = {"SPRINT OUT": "SPRINTOUT", "OW": "POW"}  # Loras @ Benedictine has one '37 POW' tagged OW
+CONCEPT_FIXES = {"SPRINT OUT": "SPRINTOUT", "SPINT OUT": "SPRINTOUT",  # Dubuque @ Wartburg has one SPINT OUT
+                 "OW": "POW"}  # Loras @ Benedictine has one '37 POW' tagged OW
 
 # Pass families rolled up into how the ball is delivered.
 PASS_GROUPS = {"3 STEP": "Quick (3-step)", "5 STEP": "Dropback (5-step)", "PAD": "Play-action",
                "PAP": "Play-action", "NAKED": "Naked / boot", "SPRINTOUT": "Sprint-out", "SCREEN": "Screen",
-               "RPO": "RPO"}
+               "RPO": "RPO", "DASH": "Sprint-out"}  # Dubuque's DASH: QB moves the launch point
 PASS_GROUP_ORDER = ["Quick (3-step)", "Dropback (5-step)", "Play-action", "Naked / boot", "Sprint-out",
                     "Screen", "RPO"]
 
 RESULT_NAMES = {"TD": "Touchdown", "FG": "FG Made", "FG MISSED": "FG Missed", "PUNT": "Punt",
                 "DOWNS": "Turnover on Downs", "INT": "Turnover", "FUMBLE": "Turnover", "HALF": "End of Half",
-                "GAME": "End of Game"}
+                "GAME": "End of Game", "SAFETY": "Safety"}
 RESULT_POINTS = {"Touchdown": 7, "FG Made": 3}
 
 XP_EP = 0.9
@@ -91,8 +103,12 @@ def expected_points(down, dist, yl100) -> float:
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
+# Mac Excel .xls exports read a non-breaking space back as these two characters ('TRIPS¬†').
+_NBSP_RE = r"\xa0|¬†"
+
+
 def _clean_str(s: pd.Series) -> pd.Series:
-    out = s.astype("string").str.replace("\xa0", " ", regex=False).str.replace(r"\s+", " ", regex=True)
+    out = s.astype("string").str.replace(_NBSP_RE, " ", regex=True).str.replace(r"\s+", " ", regex=True)
     out = out.str.strip().str.upper()
     out = out.mask(out.isin(["", "NAN", "NONE"]))
     return _obj(out)
@@ -104,7 +120,8 @@ def _obj(s: pd.Series) -> pd.Series:
 
 
 def parse_title(title: str) -> dict:
-    m = TITLE_RE.match(str(title).replace("\xa0", " "))
+    title = " ".join(str(title).replace("\xa0", " ").split())
+    m = TITLE_RE.match(TITLE_FIXES.get(title, title))
     if not m:
         raise ValueError(f"Can't read the game title {title!r} (expected e.g. '02 BUENA VISTA O vs BENEDICTINE 090526' or '05 LORAS O @ COE 100326')")
     num, team, loc, opp, mmddyy = m.groups()
@@ -119,21 +136,29 @@ def parse_title(title: str) -> dict:
 
 
 def team_name(raw: str) -> str:
-    """'BUENA VISTA' -> 'Buena Vista', 'MINNESOTA MORRIS' -> 'Minnesota Morris', 'ST OLAF' -> 'St Olaf'."""
-    return " ".join(str(raw).split()).title().replace("Mn", "MN")
+    """'BUENA VISTA' -> 'Buena Vista', 'MINNESOTA MORRIS' -> 'Minnesota Morris', 'MCMURRY' -> 'McMurry', 'STOUT' -> 'UW-Stout', 'PLATTEVILLE' -> 'UW-Platteville'."""
+    name = " ".join(str(raw).split()).title().replace("Mn", "MN")
+    name = re.sub(r"\bMc(\w)", lambda m: "Mc" + m.group(1).upper(), name)
+    return TEAM_NAMES.get(name, name)
 
 
 def read_game(source, name: str | None = None) -> pd.DataFrame:
-    """Read one breakdown file (path, bytes, or file-like) into raw rows plus game info columns."""
+    """Read one breakdown file (.xlsx or .xls; path, bytes, or file-like) into raw rows plus game info columns."""
     if isinstance(source, (bytes, bytearray)):
         source = io.BytesIO(source)
-    raw = pd.read_excel(source, header=None)
-    info = parse_title(raw.iloc[0, 0])
-    header = [str(h).replace("\xa0", " ").strip().upper() for h in raw.iloc[1]]
+    book = pd.ExcelFile(source)
+    sheet = book.sheet_names[0]
+    raw = book.parse(sheet, header=None)
+    first = str(raw.iloc[0, 0])
+    if TITLE_RE.match(first.replace("\xa0", " ")):
+        info, header_row = parse_title(first), 1
+    else:  # no title row: the title is the sheet name ('04 DUBUQUE O vs MCMURRY 092626'), header is row 1
+        info, header_row = parse_title(re.sub(r"^Sheet\s*\d+\s*-\s*", "", sheet, flags=re.IGNORECASE)), 0
+    header = [re.sub(_NBSP_RE, " ", str(h)).strip().upper() for h in raw.iloc[header_row]]
     missing = [c for c in RAW_COLUMNS if c not in header]
     if missing:
         raise ValueError(f"{name or 'file'}: missing columns {missing}")
-    d = raw.iloc[2:].copy()
+    d = raw.iloc[header_row + 1:].copy()
     d.columns = header
     d = d[RAW_COLUMNS].dropna(how="all")
     d = d[pd.to_numeric(d["SER"], errors="coerce").notna()]
@@ -227,6 +252,9 @@ def curate(raw: pd.DataFrame, infer_direction: bool = True) -> pd.DataFrame:
     # Naked boots were tagged SPRINT OUT in the 2025 file; the call name is the reliable signal.
     is_naked = d["OFF PLAY"].fillna("").astype(str).str.contains(r"\bNAKED\b") & (d["R/P"] == "P")
     d.loc[is_naked, "CONCEPT"] = "NAKED"
+    # Same for Dubuque's DASH (tagged PAR in the Nebraska Wesleyan file).
+    is_dash = d["OFF PLAY"].fillna("").astype(str).str.contains(r"\bDASH\b") & (d["R/P"] == "P")
+    d.loc[is_dash, "CONCEPT"] = "DASH"
     d["CALL #"] = _call_number(d["OFF PLAY"])
     passes = d[(d["PLAY TYPE"] == "Pass") & d["CONCEPT"].notna() & (d["CONCEPT"] != "STEP")]
     modal = passes.groupby(["team", "CALL #"])["CONCEPT"].agg(lambda s: s.mode().iat[0])  # each team's own numbering
@@ -265,7 +293,7 @@ def curate(raw: pd.DataFrame, infer_direction: bool = True) -> pd.DataFrame:
     last_idx = d[d["live"]].groupby(["game_id", "SERIES"]).tail(1).index
     d.loc[last_idx, "_last_live"] = True
     ser_end = d.groupby(["game_id", "SERIES"])["SER END"].transform(lambda s: s.dropna().iat[-1] if s.notna().any() else pd.NA)
-    d["SERIES_END"] = ser_end
+    d["SERIES_END"] = _obj(ser_end)  # a series with no SER END tag (Dubuque vs Stout's last drive) stays None
     d["touchdown"] = (d["_last_live"] & (ser_end == "TD")).astype(int)
     d["fumble"] = (d["_last_live"] & (ser_end == "FUMBLE")).astype(int)
     d["turnover"] = ((d["interception"] == 1) | (d["fumble"] == 1)).astype(int)
@@ -365,7 +393,7 @@ def curate_files(files: list[tuple[str, object]], infer_direction: bool = True) 
 
 
 def curate_folder(folder: str | Path, infer_direction: bool = True) -> tuple[pd.DataFrame, list[str]]:
-    paths = sorted(Path(folder).glob("*.xlsx"))
+    paths = sorted(p for p in Path(folder).iterdir() if p.suffix.lower() in GAME_FILE_TYPES)
     return curate_files([(p.name, p) for p in paths if not p.name.startswith("~$")], infer_direction)
 
 
