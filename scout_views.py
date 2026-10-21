@@ -735,7 +735,7 @@ def render_opening_script(games: pd.DataFrame):
 # ==============================================================================
 DRIVE_RESULTS = [("Touchdown", ("Touchdown",), "#1D9E75"), ("Field goal", ("FG Made",), "#BA7517"),
                  ("Punt", ("Punt",), "#888780"), ("Turnover", ("Turnover", "Turnover on Downs"), "#A32D2D"),
-                 ("Other", ("FG Missed", "End of Half", "End of Game", "Unknown"), "#C9C7BF")]
+                 ("Other", ("FG Missed", "Safety", "End of Half", "End of Game", "Unknown"), "#C9C7BF")]
 
 
 def drive_results_html(drives: pd.DataFrame) -> str:
