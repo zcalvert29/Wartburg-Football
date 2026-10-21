@@ -37,6 +37,6 @@ Pages: Scout, Sideline, Scouting report (PDF).
 - A blank R/P is filled from the row: PLAY "N" = no-play, a pass family or pass result = pass, a run
   family = run, nothing tagged = no-play. PLAY FAMILY "OW" is read as POW, "SPINT OUT" as SPRINTOUT. Dubuque's DASH calls count as Sprint-out (by the call name, since one file tags them PAR).
 - Excel cuts sheet names at 31 characters; titles that lost their date are completed in `TITLE_FIXES`
-  (`bv_data.py`). Opponent display names that differ from the file (Stout → UW-Stout) are in `TEAM_NAMES`.
+  (`bv_data.py`). Opponent display names that differ from the file (Stout → UW-Stout, Platteville → UW-Platteville) are in `TEAM_NAMES`.
 - EPA is offense-only: a TD is worth 6.9; INT/fumble give the opponent the ball at the spot;
   kicks aren't rows, so the last snap before a punt/FG is graded on the 4th down it left.

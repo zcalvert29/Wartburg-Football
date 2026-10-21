@@ -43,7 +43,7 @@ TITLE_FIXES = {"03 DUBUQUE O @ PLATTEVILLE 0912": "03 DUBUQUE O @ PLATTEVILLE 09
                "06 DUBUQUE O vs NEBRASKA WESLEY": "06 DUBUQUE O vs NEBRASKA WESLEYAN 101026"}
 
 # Display names that differ from the file's spelling.
-TEAM_NAMES = {"Stout": "UW-Stout"}
+TEAM_NAMES = {"Stout": "UW-Stout", "Platteville": "UW-Platteville"}
 
 DISTANCE_ORDER = ["Short (1-3)", "Medium (4-6)", "Long (7-10)", "Extra Long (11+)"]
 
@@ -136,7 +136,7 @@ def parse_title(title: str) -> dict:
 
 
 def team_name(raw: str) -> str:
-    """'BUENA VISTA' -> 'Buena Vista', 'MINNESOTA MORRIS' -> 'Minnesota Morris', 'MCMURRY' -> 'McMurry', 'STOUT' -> 'UW-Stout'."""
+    """'BUENA VISTA' -> 'Buena Vista', 'MINNESOTA MORRIS' -> 'Minnesota Morris', 'MCMURRY' -> 'McMurry', 'STOUT' -> 'UW-Stout', 'PLATTEVILLE' -> 'UW-Platteville'."""
     name = " ".join(str(raw).split()).title().replace("Mn", "MN")
     name = re.sub(r"\bMc(\w)", lambda m: "Mc" + m.group(1).upper(), name)
     return TEAM_NAMES.get(name, name)
