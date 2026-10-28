@@ -1,7 +1,7 @@
 # Wartburg — Scout Opposing Offenses
 
 Streamlit app that replicates the Dowling "Scout Opposing Offense" page (minus Run Game / Pass Game)
-for opponents' offensive breakdown files (Buena Vista, Loras, Dubuque, ...), plus new views built on the extra tags
+for opponents' offensive breakdown files (Buena Vista, Loras, Dubuque, Simpson, ...), plus new views built on the extra tags
 these files carry.
 
 ## Run
