@@ -1,5 +1,5 @@
 """
-Load and curate opponent offensive breakdown files (Buena Vista, Loras, ...).
+Load and curate opponent offensive breakdown files (Buena Vista, Loras, Dubuque, Simpson, ...).
 
 Each file is one game: row 1 is a title like "02 BUENA VISTA O vs BENEDICTINE 090526"
 (game number, scouted team, home "vs" / away "@", opponent, MMDDYY), row 2 is the header, and every
@@ -38,9 +38,11 @@ GAME_FILE_TYPES = (".xlsx", ".xls")
 TITLE_RE = re.compile(r"^\s*(\d+)\s+(.+?)\s+O\s+(vs|@)\s+(.+?)\s+(\d{6})\s*$", re.IGNORECASE)
 
 # Excel cuts sheet names at 31 characters, so a sheet-name title can lose its date or the end of the opponent.
-# Full titles for the ones we have (dates from Dubuque's schedule).
+# Full titles for the ones we have (dates from the teams' schedules).
 TITLE_FIXES = {"03 DUBUQUE O @ PLATTEVILLE 0912": "03 DUBUQUE O @ PLATTEVILLE 091226",
-               "06 DUBUQUE O vs NEBRASKA WESLEY": "06 DUBUQUE O vs NEBRASKA WESLEYAN 101026"}
+               "06 DUBUQUE O vs NEBRASKA WESLEY": "06 DUBUQUE O vs NEBRASKA WESLEYAN 101026",
+               "04 SIMPSON O @ HOWARD PAYNE 092": "04 SIMPSON O @ HOWARD PAYNE 092626",  # neutral site, Frisco TX
+               "05 SIMPSON O @ BUENA VISTA 1003": "05 SIMPSON O @ BUENA VISTA 100326"}  # BV's own file has 10/3/26
 
 # Display names that differ from the file's spelling.
 TEAM_NAMES = {"Stout": "UW-Stout", "Platteville": "UW-Platteville"}
@@ -54,6 +56,8 @@ ZONE_ORDER = [z[0] for z in FP_ZONES]
 
 # PLAY FAMILY spelling fixes.
 CONCEPT_FIXES = {"SPRINT OUT": "SPRINTOUT", "SPINT OUT": "SPRINTOUT",  # Dubuque @ Wartburg has one SPINT OUT
+                 "PAR": "PAP",  # Simpson & Dubuque scouts' typo for play-action pass
+                 "5 STEP`": "5 STEP", "3 STEPS": "3 STEP",  # Simpson @ Buena Vista / vs Coe
                  "OW": "POW"}  # Loras @ Benedictine has one '37 POW' tagged OW
 
 # Pass families rolled up into how the ball is delivered.
@@ -252,7 +256,7 @@ def curate(raw: pd.DataFrame, infer_direction: bool = True) -> pd.DataFrame:
     # Naked boots were tagged SPRINT OUT in the 2025 file; the call name is the reliable signal.
     is_naked = d["OFF PLAY"].fillna("").astype(str).str.contains(r"\bNAKED\b") & (d["R/P"] == "P")
     d.loc[is_naked, "CONCEPT"] = "NAKED"
-    # Same for Dubuque's DASH (tagged PAR in the Nebraska Wesleyan file).
+    # Same for Dubuque's DASH (tagged PAR, i.e. PAP, in the Nebraska Wesleyan file).
     is_dash = d["OFF PLAY"].fillna("").astype(str).str.contains(r"\bDASH\b") & (d["R/P"] == "P")
     d.loc[is_dash, "CONCEPT"] = "DASH"
     d["CALL #"] = _call_number(d["OFF PLAY"])
