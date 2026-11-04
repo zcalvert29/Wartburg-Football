@@ -2,7 +2,7 @@
 Wartburg football — Scout Opposing Offenses (Buena Vista, Loras, ...).
 
 Run with:  streamlit run app.py
-Game files go in ./data (one offense breakdown .xlsx/.xls per game, any team), or upload them in the sidebar.
+Game files go in ./data (one offense breakdown .xlsx/.xls/.csv per game, any team), or upload them in the sidebar.
 The team comes from each file's title row; pick the team at the top of the sidebar (or ?team=Loras in the URL).
 Pages: Scout (every tab), Sideline (one situation at a time, phone-friendly), Scouting report (one-page PDF).
 """
@@ -43,7 +43,7 @@ filter_box = st.sidebar.container()  # page filters are drawn here, above the da
 with st.sidebar:
     st.divider()
     with st.expander("Data & settings"):
-        uploads = st.file_uploader("Add game files (.xlsx / .xls)", type=["xlsx", "xls"], accept_multiple_files=True,
+        uploads = st.file_uploader("Add game files (.xlsx / .xls / .csv)", type=["xlsx", "xls", "csv"], accept_multiple_files=True,
                                    help="Same layout as the files in /data. Uploads last until the page is "
                                         "closed; drop files in /data to keep them.")
         infer_dir = st.toggle("Read run direction from play number", value=True,

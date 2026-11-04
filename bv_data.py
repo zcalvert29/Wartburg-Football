@@ -4,7 +4,8 @@ Load and curate opponent offensive breakdown files (Buena Vista, Loras, Dubuque,
 Each file is one game: row 1 is a title like "02 BUENA VISTA O vs BENEDICTINE 090526"
 (game number, scouted team, home "vs" / away "@", opponent, MMDDYY), row 2 is the header, and every
 row after that is one offensive play (or a no-play row). Some files (the Dubuque .xls exports) leave the
-title row out and carry the title as the sheet name instead, with the header in row 1.
+title row out and carry the title as the sheet name instead, with the header in row 1. A .csv with no title row
+takes its title from the file name ('02 CENTRAL O @ GUSTAVUS 090526.csv').
 
 curate_folder() / curate_files() return a play-level DataFrame (every team's games, with a `team`
 column to split on) with the same core column
@@ -15,6 +16,7 @@ drive_table() rolls plays up to one row per series.
 """
 from __future__ import annotations
 
+import csv
 import io
 import re
 from pathlib import Path
@@ -33,7 +35,7 @@ RENAME = {"SER": "SERIES", "S#": "SNAP", "FPOS": "YARD LN", "HASH - D": "HASH", 
           "FORMATION": "OFF FORM", "FORM STR": "OFF STR", "PLAY": "OFF PLAY", "PLAY FAMILY": "CONCEPT",
           "ROUTE TYPE": "ROUTE", "GAIN": "GN/LS"}
 
-GAME_FILE_TYPES = (".xlsx", ".xls")
+GAME_FILE_TYPES = (".xlsx", ".xls", ".csv")
 
 TITLE_RE = re.compile(r"^\s*(\d+)\s+(.+?)\s+O\s+(vs|@)\s+(.+?)\s+(\d{6})\s*$", re.IGNORECASE)
 
@@ -43,6 +45,9 @@ TITLE_FIXES = {"03 DUBUQUE O @ PLATTEVILLE 0912": "03 DUBUQUE O @ PLATTEVILLE 09
                "06 DUBUQUE O vs NEBRASKA WESLEY": "06 DUBUQUE O vs NEBRASKA WESLEYAN 101026",
                "04 SIMPSON O @ HOWARD PAYNE 092": "04 SIMPSON O @ HOWARD PAYNE 092626",  # neutral site, Frisco TX
                "05 SIMPSON O @ BUENA VISTA 1003": "05 SIMPSON O @ BUENA VISTA 100326"}  # BV's own file has 10/3/26
+
+# Tagging typos in FORMATION / MOTION, fixed word by word.
+WORD_FIXES = {"ACORSS": "ACROSS", "ACCROSS": "ACROSS", "SACTTER": "SCATTER", "SPEAD": "SPREAD"}
 
 # Display names that differ from the file's spelling.
 TEAM_NAMES = {"Stout": "UW-Stout", "Platteville": "UW-Platteville"}
@@ -127,7 +132,8 @@ def parse_title(title: str) -> dict:
     title = " ".join(str(title).replace("\xa0", " ").split())
     m = TITLE_RE.match(TITLE_FIXES.get(title, title))
     if not m:
-        raise ValueError(f"Can't read the game title {title!r} (expected e.g. '02 BUENA VISTA O vs BENEDICTINE 090526' or '05 LORAS O @ COE 100326')")
+        raise ValueError(f"Can't read the game title {title!r} (expected e.g. '02 BUENA VISTA O vs BENEDICTINE 090526' or "
+                         "'05 LORAS O @ COE 100326'; a .csv with no title row needs a file name like that)")
     num, team, loc, opp, mmddyy = m.groups()
     date = pd.to_datetime(mmddyy, format="%m%d%y")
     season = date.year if date.month >= 3 else date.year - 1  # January bowl/playoff games count to the prior fall
@@ -146,18 +152,41 @@ def team_name(raw: str) -> str:
     return TEAM_NAMES.get(name, name)
 
 
+def _read_csv(source) -> pd.DataFrame:
+    """A breakdown .csv as a header=None frame of strings (blank cells NaN)."""
+    data = source.read() if hasattr(source, "read") else Path(source).read_bytes()
+    rows = [r for r in csv.reader(io.StringIO(data.decode("utf-8-sig", errors="replace"))) if any(c.strip() for c in r)]
+    header = [h.strip().upper() for h in rows[0]]
+    width = max(len(header), len(RAW_COLUMNS))
+    m = header.index("MOTION") if "MOTION" in header else None
+    out = []
+    for r in rows:
+        # An unquoted comma inside MOTION ('SHIFT, Z JET') splits it in two and pushes the rest of the row one
+        # column right (the export drops the last cell to keep the width), so join it back up.
+        if m is not None and len(r) > m + 1 and r[m + 1].startswith(" "):
+            r = r[:m] + [r[m] + "," + r[m + 1]] + r[m + 2:]
+        out.append((r + [""] * width)[:width])
+    return pd.DataFrame(out).replace(r"^\s*$", np.nan, regex=True)
+
+
 def read_game(source, name: str | None = None) -> pd.DataFrame:
-    """Read one breakdown file (.xlsx or .xls; path, bytes, or file-like) into raw rows plus game info columns."""
+    """Read one breakdown file (.xlsx, .xls or .csv; path, bytes, or file-like) into raw rows plus game info columns."""
+    label = name or str(source)
     if isinstance(source, (bytes, bytearray)):
         source = io.BytesIO(source)
-    book = pd.ExcelFile(source)
-    sheet = book.sheet_names[0]
-    raw = book.parse(sheet, header=None)
+    if label.lower().endswith(".csv"):
+        raw = _read_csv(source)
+        fallback = Path(label).stem  # no title row: the title is the file name ('02 CENTRAL O @ GUSTAVUS 090526.csv')
+    else:
+        book = pd.ExcelFile(source)
+        sheet = book.sheet_names[0]
+        raw = book.parse(sheet, header=None)
+        fallback = re.sub(r"^Sheet\s*\d+\s*-\s*", "", sheet, flags=re.IGNORECASE)  # '04 DUBUQUE O vs MCMURRY 092626'
     first = str(raw.iloc[0, 0])
     if TITLE_RE.match(first.replace("\xa0", " ")):
         info, header_row = parse_title(first), 1
-    else:  # no title row: the title is the sheet name ('04 DUBUQUE O vs MCMURRY 092626'), header is row 1
-        info, header_row = parse_title(re.sub(r"^Sheet\s*\d+\s*-\s*", "", sheet, flags=re.IGNORECASE)), 0
+    else:  # no title row: header is row 1
+        info, header_row = parse_title(fallback), 0
     header = [re.sub(_NBSP_RE, " ", str(h)).strip().upper() for h in raw.iloc[header_row]]
     missing = [c for c in RAW_COLUMNS if c not in header]
     if missing:
@@ -227,6 +256,14 @@ def curate(raw: pd.DataFrame, infer_direction: bool = True) -> pd.DataFrame:
     for c in ["HASH", "OFF FORM", "OFF STR", "BACKFIELD", "MOTION", "R/P", "OFF PLAY", "CONCEPT", "RPO", "ROUTE",
               "PASS RESULT", "PROTECTION", "SER END"]:
         d[c] = _clean_str(d[c])
+    for c in ["OFF FORM", "MOTION"]:
+        d[c] = _obj(d[c].astype("string").str.replace(r"\b[A-Z]+\b", lambda m: WORD_FIXES.get(m[0], m[0]), regex=True))
+    d["R/P"] = d["R/P"].where(d["R/P"].isin(["R", "P", "N"]), None)  # a stray 'L' gets filled from the row below
+    d["PASS RESULT"] = d["PASS RESULT"].replace({"INT": "X"})
+
+    # Down 5 is a two-point try after a TD (not part of any drive); down 0 is a 1st down tagged 0.
+    d = d[~(d["DN"] > 4)].copy()
+    d.loc[d["DN"] == 0, "DN"] = 1
 
     # Personnel: Excel turns 00 into 0.
     pers = pd.to_numeric(d["PERSONNEL"], errors="coerce")
@@ -237,13 +274,17 @@ def curate(raw: pd.DataFrame, infer_direction: bool = True) -> pd.DataFrame:
     d["WEEK"] = d.groupby("team")["date"].rank(method="dense").astype(int)
 
     # Blank R/P: fill it from the rest of the row. 'N' in PLAY marks a no-play; a pass family or a pass
-    # result means a pass; a run family means a run; anything else (no call tagged) is treated as a no-play.
+    # result means a pass; a run family means a run. With no call tagged (the Central files tag few calls), a
+    # snap with a formation is a run unless the next row replays the same down at the same spot (a no-play);
+    # anything else is treated as a no-play.
     blank = d["R/P"].isna()
     if blank.any():
         fam = d["CONCEPT"].replace(CONCEPT_FIXES)
         run_fams = set(d.loc[d["R/P"] == "R", "CONCEPT"].dropna())
+        nxt = d.groupby(["game_id", "SERIES"])[["DN", "DIST", "YARD LN"]].shift(-1)
+        replayed = (nxt == d[["DN", "DIST", "YARD LN"]]).all(axis=1)
         guess = np.select([d["OFF PLAY"] == "N", fam.isin(list(PASS_GROUPS) + ["STEP"]) | d["PASS RESULT"].notna(),
-                           fam.isin(run_fams)], ["N", "P", "R"], "N")
+                           fam.isin(run_fams), d["OFF FORM"].notna() & ~replayed], ["N", "P", "R", "R"], "N")
         d.loc[blank, "R/P"] = guess[blank.to_numpy()]
     d["R/P_FILLED"] = blank
 
