@@ -46,11 +46,15 @@ TITLE_FIXES = {"03 DUBUQUE O @ PLATTEVILLE 0912": "03 DUBUQUE O @ PLATTEVILLE 09
                "04 SIMPSON O @ HOWARD PAYNE 092": "04 SIMPSON O @ HOWARD PAYNE 092626",  # neutral site, Frisco TX
                "05 SIMPSON O @ BUENA VISTA 1003": "05 SIMPSON O @ BUENA VISTA 100326",  # BV's own file has 10/3/26
                # Coe's sheets are just 'Coe vs <opponent> 2026' (no number, date or home/away); numbered by week.
+               "Coe vs Cornell 2026": "01 COE O vs CORNELL 090526",
                "Coe vs River Falls 2026": "02 COE O vs RIVER FALLS 091226",
                "Coe vs UW Osh Kosh 2026": "03 COE O vs OSHKOSH 091926",
                "Coe vs Loras 2026": "05 COE O vs LORAS 100326",  # Loras's own file has 10/3/26
+               "Coe vs Central 2026": "06 COE O vs CENTRAL 101026",  # Central's own file has 10/10/26
+               "Coe vs Buena Vista 2026": "07 COE O @ BUENA VISTA 101726",
                "Coe vs Simpson 2026": "08 COE O @ SIMPSON 102426",  # Simpson's own file has 10/24/26
-               "Coe vs Nebraska Wesleyan 2026": "09 COE O vs NEBRASKA WESLEYAN 103126"}
+               "Coe vs Nebraska Wesleyan 2026": "09 COE O vs NEBRASKA WESLEYAN 103126",
+               "Coe vs Dubuque 2026": "10 COE O vs DUBUQUE 110726"}
 
 # Tagging typos in FORMATION / MOTION, fixed word by word.
 WORD_FIXES = {"ACORSS": "ACROSS", "ACCROSS": "ACROSS", "SACTTER": "SCATTER", "SPEAD": "SPREAD"}
