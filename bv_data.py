@@ -59,6 +59,9 @@ TITLE_FIXES = {"03 DUBUQUE O @ PLATTEVILLE 0912": "03 DUBUQUE O @ PLATTEVILLE 09
 # Tagging typos in FORMATION / MOTION, fixed word by word.
 WORD_FIXES = {"ACORSS": "ACROSS", "ACCROSS": "ACROSS", "SACTTER": "SCATTER", "SPEAD": "SPREAD"}
 
+# Single-play corrections for files we can't edit in place (.xls): (game_id, SER, S#) -> {raw column: value}.
+PLAY_FIXES = {("Coe 2026-09-05 Cornell", 10, 1): {"PASS RESULT": "C"}}  # 39 T HITCH for 12, tagged P
+
 # Display names that differ from the file's spelling.
 TEAM_NAMES = {"Stout": "UW-Stout", "Platteville": "UW-Platteville", "Oshkosh": "UW-Oshkosh",
               "River Falls": "UW-River Falls"}
@@ -216,6 +219,11 @@ def read_game(source, name: str | None = None) -> pd.DataFrame:
     d = d[pd.to_numeric(d["SER"], errors="coerce").notna()]
     for k, v in info.items():
         d[k] = v
+    for (gid, ser, snap), fix in PLAY_FIXES.items():
+        if gid == info["game_id"]:
+            row = (pd.to_numeric(d["SER"], errors="coerce") == ser) & (pd.to_numeric(d["S#"], errors="coerce") == snap)
+            for col, val in fix.items():
+                d.loc[row, col] = val
     d["source_file"] = name or ""
     return d.reset_index(drop=True)
 
