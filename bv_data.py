@@ -44,13 +44,20 @@ TITLE_RE = re.compile(r"^\s*(\d+)\s+(.+?)\s+O\s+(vs|@)\s+(.+?)\s+(\d{6})\s*$", r
 TITLE_FIXES = {"03 DUBUQUE O @ PLATTEVILLE 0912": "03 DUBUQUE O @ PLATTEVILLE 091226",
                "06 DUBUQUE O vs NEBRASKA WESLEY": "06 DUBUQUE O vs NEBRASKA WESLEYAN 101026",
                "04 SIMPSON O @ HOWARD PAYNE 092": "04 SIMPSON O @ HOWARD PAYNE 092626",  # neutral site, Frisco TX
-               "05 SIMPSON O @ BUENA VISTA 1003": "05 SIMPSON O @ BUENA VISTA 100326"}  # BV's own file has 10/3/26
+               "05 SIMPSON O @ BUENA VISTA 1003": "05 SIMPSON O @ BUENA VISTA 100326",  # BV's own file has 10/3/26
+               # Coe's sheets are just 'Coe vs <opponent> 2026' (no number, date or home/away); numbered by week.
+               "Coe vs River Falls 2026": "02 COE O vs RIVER FALLS 091226",
+               "Coe vs UW Osh Kosh 2026": "03 COE O vs OSHKOSH 091926",
+               "Coe vs Loras 2026": "05 COE O vs LORAS 100326",  # Loras's own file has 10/3/26
+               "Coe vs Simpson 2026": "08 COE O @ SIMPSON 102426",  # Simpson's own file has 10/24/26
+               "Coe vs Nebraska Wesleyan 2026": "09 COE O vs NEBRASKA WESLEYAN 103126"}
 
 # Tagging typos in FORMATION / MOTION, fixed word by word.
 WORD_FIXES = {"ACORSS": "ACROSS", "ACCROSS": "ACROSS", "SACTTER": "SCATTER", "SPEAD": "SPREAD"}
 
 # Display names that differ from the file's spelling.
-TEAM_NAMES = {"Stout": "UW-Stout", "Platteville": "UW-Platteville"}
+TEAM_NAMES = {"Stout": "UW-Stout", "Platteville": "UW-Platteville", "Oshkosh": "UW-Oshkosh",
+              "River Falls": "UW-River Falls"}
 
 DISTANCE_ORDER = ["Short (1-3)", "Medium (4-6)", "Long (7-10)", "Extra Long (11+)"]
 
@@ -158,15 +165,23 @@ def _read_csv(source) -> pd.DataFrame:
     rows = [r for r in csv.reader(io.StringIO(data.decode("utf-8-sig", errors="replace"))) if any(c.strip() for c in r)]
     header = [h.strip().upper() for h in rows[0]]
     width = max(len(header), len(RAW_COLUMNS))
-    m = header.index("MOTION") if "MOTION" in header else None
-    out = []
-    for r in rows:
-        # An unquoted comma inside MOTION ('SHIFT, Z JET') splits it in two and pushes the rest of the row one
-        # column right (the export drops the last cell to keep the width), so join it back up.
-        if m is not None and len(r) > m + 1 and r[m + 1].startswith(" "):
-            r = r[:m] + [r[m] + "," + r[m + 1]] + r[m + 2:]
-        out.append((r + [""] * width)[:width])
-    return pd.DataFrame(out).replace(r"^\s*$", np.nan, regex=True)
+    return pd.DataFrame([(r + [""] * width)[:width] for r in rows]).replace(r"^\s*$", np.nan, regex=True)
+
+
+def _unsplit_motion(d: pd.DataFrame) -> pd.DataFrame:
+    """A two-part motion ('SHIFT, Z JET') sometimes spills its second part into R/P and pushes the rest of the row
+    one column right (the last cell drops off). Spot it by a non-R/P value in R/P with R/P/N in PLAY, and shift back."""
+    rp = d["R/P"].astype("string").str.strip().str.upper()
+    play = d["PLAY"].astype("string").str.strip().str.upper()
+    bad = (rp.notna() & ~rp.isin(["R", "P", "N"]) & play.isin(["R", "P", "N"])).fillna(False).to_numpy()
+    if bad.any():
+        i = RAW_COLUMNS.index("R/P")
+        d = d.copy()
+        d.loc[bad, "MOTION"] = d.loc[bad, "MOTION"].astype(str) + ", " + d.loc[bad, "R/P"].astype(str).str.strip()
+        tail = RAW_COLUMNS[i:]
+        shifted = d.loc[bad, tail[1:]].to_numpy()
+        d.loc[bad, tail] = np.column_stack([shifted, np.full(bad.sum(), np.nan)])
+    return d
 
 
 def read_game(source, name: str | None = None) -> pd.DataFrame:
@@ -193,7 +208,7 @@ def read_game(source, name: str | None = None) -> pd.DataFrame:
         raise ValueError(f"{name or 'file'}: missing columns {missing}")
     d = raw.iloc[header_row + 1:].copy()
     d.columns = header
-    d = d[RAW_COLUMNS].dropna(how="all")
+    d = _unsplit_motion(d[RAW_COLUMNS].dropna(how="all"))
     d = d[pd.to_numeric(d["SER"], errors="coerce").notna()]
     for k, v in info.items():
         d[k] = v
