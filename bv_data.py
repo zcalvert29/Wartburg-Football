@@ -54,7 +54,13 @@ TITLE_FIXES = {"03 DUBUQUE O @ PLATTEVILLE 0912": "03 DUBUQUE O @ PLATTEVILLE 09
                "Coe vs Buena Vista 2026": "07 COE O @ BUENA VISTA 101726",
                "Coe vs Simpson 2026": "08 COE O @ SIMPSON 102426",  # Simpson's own file has 10/24/26
                "Coe vs Nebraska Wesleyan 2026": "09 COE O vs NEBRASKA WESLEYAN 103126",
-               "Coe vs Dubuque 2026": "10 COE O vs DUBUQUE 110726"}
+               "Coe vs Dubuque 2026": "10 COE O vs DUBUQUE 110726",
+               # 'WASHINGTON ST LOUIS' leaves room for only the start of the opponent (dates from WashU's schedule).
+               "01 WASHINGTON ST LOUIS O @ WHEA": "01 WASHINGTON ST LOUIS O @ WHEATON 102525",
+               "02 WASHINGTON ST LOUIS O vs DEP": "02 WASHINGTON ST LOUIS O vs DEPAUW 091226",
+               "03 WASHINGTON ST LOUIS O vs JOH": "03 WASHINGTON ST LOUIS O vs JOHN CARROLL 100326",
+               "05 WASHINGTON ST LOUIS O vs DEN": "05 WASHINGTON ST LOUIS O vs DENISON 103126",
+               "06 WASHINGTON ST LOUIS O @ OHIO": "06 WASHINGTON ST LOUIS O @ OHIO WESLEYAN 110726"}
 
 # Tagging typos in FORMATION / MOTION, fixed word by word.
 WORD_FIXES = {"ACORSS": "ACROSS", "ACCROSS": "ACROSS", "SACTTER": "SCATTER", "SPEAD": "SPREAD"}
@@ -64,7 +70,7 @@ PLAY_FIXES = {("Coe 2026-09-05 Cornell", 10, 1): {"PASS RESULT": "C"}}  # 39 T H
 
 # Display names that differ from the file's spelling.
 TEAM_NAMES = {"Stout": "UW-Stout", "Platteville": "UW-Platteville", "Oshkosh": "UW-Oshkosh",
-              "River Falls": "UW-River Falls"}
+              "River Falls": "UW-River Falls", "Washington St Louis": "Wash U", "Depauw": "DePauw"}
 
 DISTANCE_ORDER = ["Short (1-3)", "Medium (4-6)", "Long (7-10)", "Extra Long (11+)"]
 
@@ -75,7 +81,7 @@ ZONE_ORDER = [z[0] for z in FP_ZONES]
 
 # PLAY FAMILY spelling fixes.
 CONCEPT_FIXES = {"SPRINT OUT": "SPRINTOUT", "SPINT OUT": "SPRINTOUT",  # Dubuque @ Wartburg has one SPINT OUT
-                 "PAR": "PAP",  # Simpson & Dubuque scouts' typo for play-action pass
+                 "PAR": "PAP", "SCEEN": "SCREEN",  # Simpson & Dubuque scouts' typo for play-action pass
                  "5 STEP`": "5 STEP", "3 STEPS": "3 STEP",  # Simpson @ Buena Vista / vs Coe
                  "OW": "POW"}  # Loras @ Benedictine has one '37 POW' tagged OW
 
@@ -286,6 +292,7 @@ def curate(raw: pd.DataFrame, infer_direction: bool = True) -> pd.DataFrame:
     for c in ["OFF FORM", "MOTION"]:
         d[c] = _obj(d[c].astype("string").str.replace(r"\b[A-Z]+\b", lambda m: WORD_FIXES.get(m[0], m[0]), regex=True))
     d["R/P"] = d["R/P"].where(d["R/P"].isin(["R", "P", "N"]), None)  # a stray 'L' gets filled from the row below
+    d.loc[d["CONCEPT"] == "KNEEL", "R/P"] = "N"  # most files tag kneel-downs N; Wash U vs DePauw tags them R
     d["PASS RESULT"] = d["PASS RESULT"].replace({"INT": "X"})
 
     # Down 5 is a two-point try after a TD (not part of any drive); down 0 is a 1st down tagged 0.
