@@ -1,7 +1,7 @@
 # Wartburg — Scout Opposing Offenses
 
 Streamlit app that replicates the Dowling "Scout Opposing Offense" page (minus Run Game / Pass Game)
-for opponents' offensive breakdown files (Buena Vista, Loras, Dubuque, Simpson, Central, Coe, ...), plus new views built on the extra tags
+for opponents' offensive breakdown files (Buena Vista, Loras, Dubuque, Simpson, Central, Coe, Wash U, ...), plus new views built on the extra tags
 these files carry.
 
 ## Run
@@ -38,10 +38,10 @@ Pages: Scout, Sideline, Scouting report (PDF).
 - A blank R/P is filled from the row: PLAY "N" = no-play, a pass family or pass result = pass, a run
   family = run; with no call tagged, a snap with a formation = run unless the next row replays the same
   down and spot (then no-play), and anything else = no-play. An unknown R/P value (Central's one "L") is
-  treated as blank. PLAY FAMILY "OW" is read as POW, "PAR" as PAP, "SPINT OUT" as SPRINTOUT. Dubuque's DASH calls count as Sprint-out (by the call name, since one file tags them PAR).
+  treated as blank. PLAY FAMILY "OW" is read as POW, "PAR" as PAP, "SCEEN" as SCREEN, "SPINT OUT" as SPRINTOUT. Dubuque's DASH calls count as Sprint-out (by the call name, since one file tags them PAR).
 - Excel cuts sheet names at 31 characters; titles that lost their date (and Coe's bare 'Coe vs Simpson 2026' sheet names) are completed in `TITLE_FIXES`
-  (`bv_data.py`). Down 5 is a two-point try and is dropped; down 0 is read as 1st. Formation / motion typos
+  (`bv_data.py`). Down 5 is a two-point try and is dropped; a KNEEL is a no-play; down 0 is read as 1st. Formation / motion typos
   (ACORSS, SACTTER, SPEAD, ...) are in `WORD_FIXES`; a two-part motion that spilled into R/P
-  ('SHIFT, Z JET') is put back and the row shifted left; pass result "INT" is read as X. Single-play corrections to `.xls` files (which can't be edited here) are in `PLAY_FIXES`. Opponent display names that differ from the file (Stout → UW-Stout, Platteville → UW-Platteville, Oshkosh → UW-Oshkosh, River Falls → UW-River Falls) are in `TEAM_NAMES`.
+  ('SHIFT, Z JET') is put back and the row shifted left; pass result "INT" is read as X. Single-play corrections to `.xls` files (which can't be edited here) are in `PLAY_FIXES`. Opponent display names that differ from the file (Stout → UW-Stout, Platteville → UW-Platteville, Oshkosh → UW-Oshkosh, River Falls → UW-River Falls, Washington St Louis → Wash U) are in `TEAM_NAMES`.
 - EPA is offense-only: a TD is worth 6.9; INT/fumble give the opponent the ball at the spot;
   kicks aren't rows, so the last snap before a punt/FG is graded on the 4th down it left.
